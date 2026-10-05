@@ -28,3 +28,18 @@ class KillSwitchEngaged(CoinWatchError):
 
 class QuoteRejected(CoinWatchError):
     """A pre-trade quote failed a safety check."""
+
+
+class ChainReadError(CoinWatchError):
+    """A chain account could not be read.
+
+    ``failure`` is a stable label such as ``missing``, ``short``, ``invalid``,
+    ``mint``, or ``rpc``. ``mint`` is the coin address. The message is only
+    that label, so it does not include an RPC URL.
+    """
+
+    def __init__(self, failure: str, mint: str) -> None:
+        """Record the failure label and mint without copying the RPC URL."""
+        self.failure = failure
+        self.mint = mint
+        super().__init__(failure)

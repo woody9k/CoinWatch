@@ -1,6 +1,8 @@
 """Process settings loaded from the environment."""
 
-from pydantic import Field, SecretStr
+from decimal import Decimal
+
+from pydantic import Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -11,12 +13,16 @@ class Settings(BaseSettings):
     ``DATABASE_URL`` is the SQLAlchemy URL for the shared SQLite database.
     ``COINWATCH_ADMIN_USER`` and ``COINWATCH_ADMIN_PASSWORD`` seed the first
     admin. The password is a bootstrap secret: do not log it.
+    ``SOLANA_RPC_URL`` and ``COINWATCH_SOL_USD`` enable the BobCoin poller.
+    An empty SOL price stays unset so the process does not invent one.
+    ``SOLANA_RPC_URL`` may contain an API key: do not log it.
     """
 
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",
         extra="ignore",
+        populate_by_name=True,
     )
 
     database_url: str = Field(
@@ -31,6 +37,36 @@ class Settings(BaseSettings):
         default=SecretStr(""),
         description="Bootstrap admin password (COINWATCH_ADMIN_PASSWORD). Never log this value.",
     )
+    solana_rpc_url: str = Field(
+        default="",
+        description="Solana JSON-RPC URL (SOLANA_RPC_URL). Empty disables the coin poller.",
+    )
+    sol_usd: Decimal | None = Field(
+        default=None,
+        validation_alias="COINWATCH_SOL_USD",
+        description=(
+            "SOL price in USD (COINWATCH_SOL_USD). Empty means unset. "
+            "The poller does not invent a price."
+        ),
+    )
+
+    @field_validator("solana_rpc_url", mode="before")
+    @classmethod
+    def _strip_rpc_url(cls, value: object) -> object:
+        """Trim whitespace so a blank RPC URL stays disabled."""
+        if isinstance(value, str):
+            return value.strip()
+        return value
+
+    @field_validator("sol_usd", mode="before")
+    @classmethod
+    def _blank_sol_usd_is_unset(cls, value: object) -> object:
+        """Treat a blank SOL price as unset instead of guessing a rate."""
+        if isinstance(value, str) and value.strip() == "":
+            return None
+        if isinstance(value, str):
+            return value.strip()
+        return value
 
 
 def get_settings() -> Settings:
