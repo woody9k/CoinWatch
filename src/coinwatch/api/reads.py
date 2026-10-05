@@ -1,4 +1,4 @@
-"""Read-only routes for coins, ticks, the audit log, and price alerts.
+"""Read-only routes for coins, ticks, positions, trades, the audit log, and alerts.
 
 Each route requires a live session and checks its permission before a query
 result is returned. These routes do not create, update, or delete rows.
@@ -13,7 +13,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from coinwatch.api.app import SESSION_COOKIE, error_response, request_id_of, request_session
-from coinwatch.db.models import AuditEvent, Coin, PriceAlert, Tick, User
+from coinwatch.db.models import AuditEvent, Coin, Position, PriceAlert, Tick, Trade, User
 from coinwatch.services.identity import get_session_user, require_permission
 
 router = APIRouter()
@@ -22,6 +22,9 @@ _TICK_LIMIT_DEFAULT = 100
 _TICK_LIMIT_MAX = 500
 _AUDIT_LIMIT_DEFAULT = 50
 _AUDIT_LIMIT_MAX = 200
+_TRADE_LIMIT_DEFAULT = 50
+_TRADE_LIMIT_MIN = 1
+_TRADE_LIMIT_MAX = 200
 
 
 async def list_coins(request: Request) -> Response:
@@ -104,6 +107,56 @@ async def list_audit(request: Request, limit: int = _AUDIT_LIMIT_DEFAULT) -> Res
         .limit(_clamp(limit, _AUDIT_LIMIT_MAX))
     ).all()
     return JSONResponse(content=[_audit_item(row) for row in rows])
+
+
+async def list_positions(request: Request) -> Response:
+    """Return every position row.
+
+    Requires ``trades.read`` before the lookup. ``size``, ``cost_native``,
+    and ``realized_pnl_native`` are decimal strings. ``updated_at`` is
+    ISO-8601. An empty table is an empty list.
+    """
+    opened = _session_user(request)
+    if isinstance(opened, JSONResponse):
+        return opened
+    db, user = opened
+    require_permission(
+        db,
+        user,
+        "trades.read",
+        entity_type="position",
+        entity_id="",
+        request_id=request_id_of(request),
+    )
+    rows = db.scalars(select(Position).order_by(Position.bot_id)).all()
+    return JSONResponse(content=[_position_item(row) for row in rows])
+
+
+async def list_trades(request: Request, limit: int = _TRADE_LIMIT_DEFAULT) -> Response:
+    """Return the newest trades.
+
+    Requires ``trades.read`` before the lookup. ``limit`` defaults to 50.
+    A limit outside 1..200 is 422 ``invalid_limit``. Money fields are decimal
+    strings. ``tx_sig`` is null when the fill has no signature. This route
+    does not insert a trade.
+    """
+    opened = _session_user(request)
+    if isinstance(opened, JSONResponse):
+        return opened
+    db, user = opened
+    require_permission(
+        db,
+        user,
+        "trades.read",
+        entity_type="trade",
+        entity_id="",
+        request_id=request_id_of(request),
+    )
+    bounded = _trade_limit(limit)
+    if isinstance(bounded, JSONResponse):
+        return bounded
+    rows = db.scalars(select(Trade).order_by(Trade.ts.desc(), Trade.id.desc()).limit(bounded)).all()
+    return JSONResponse(content=[_trade_item(row) for row in rows])
 
 
 async def list_price_alerts(request: Request) -> Response:
@@ -197,6 +250,47 @@ def _audit_item(row: AuditEvent) -> dict[str, object]:
     }
 
 
+def _position_item(row: Position) -> dict[str, object]:
+    """Serialize one position. Money fields are decimal strings."""
+    return {
+        "bot_id": row.bot_id,
+        "chain": row.chain,
+        "coin_address": row.coin_address,
+        "size": _decimal(row.size),
+        "cost_native": _decimal(row.cost_native),
+        "realized_pnl_native": _decimal(row.realized_pnl_native),
+        "updated_at": _timestamp(row.updated_at),
+    }
+
+
+def _trade_item(row: Trade) -> dict[str, object]:
+    """Serialize one fill. Money fields are decimal strings. ``tx_sig`` may be null."""
+    return {
+        "id": row.id,
+        "bot_id": row.bot_id,
+        "chain": row.chain,
+        "coin_address": row.coin_address,
+        "side": row.side,
+        "amount_native": _decimal(row.amount_native),
+        "price_native": _decimal(row.price_native),
+        "price_usd": _decimal(row.price_usd),
+        "mcap_usd": _decimal(row.mcap_usd),
+        "fee_native": _decimal(row.fee_native),
+        "price_impact_pct": _decimal(row.price_impact_pct),
+        "tx_sig": row.tx_sig,
+        "paper": row.paper,
+        "actor_id": row.actor_id,
+        "ts": _timestamp(row.ts),
+    }
+
+
+def _trade_limit(limit: int) -> int | JSONResponse:
+    """Accept a limit in 1..200, or return 422 ``invalid_limit``."""
+    if limit < _TRADE_LIMIT_MIN or limit > _TRADE_LIMIT_MAX:
+        return error_response(422, "invalid_limit", "Limit must be from 1 to 200.")
+    return limit
+
+
 def _price_alert_item(row: PriceAlert) -> dict[str, object]:
     """Serialize one price alert. ``threshold`` is a string."""
     return {
@@ -240,5 +334,7 @@ def _timestamp(value: datetime | None) -> str | None:
 
 router.get("/api/coins")(list_coins)
 router.get("/api/ticks")(list_ticks)
+router.get("/api/positions")(list_positions)
+router.get("/api/trades")(list_trades)
 router.get("/api/audit")(list_audit)
 router.get("/api/price-alerts")(list_price_alerts)

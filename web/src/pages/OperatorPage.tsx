@@ -3,14 +3,18 @@ import { ApiError } from "@/lib/api.ts";
 import {
   fetchBots,
   fetchCoins,
+  fetchPositions,
+  fetchTrades,
   logout,
   previewQuote,
   transitionBot,
   type Bot,
   type BotAction,
   type Coin,
+  type Position,
   type QuotePreview,
   type Tick,
+  type Trade,
 } from "@/lib/resources.ts";
 import { useSession } from "@/session.ts";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -27,6 +31,7 @@ export function OperatorPage() {
   const session = useSession();
   const queryClient = useQueryClient();
   const me = session.data;
+  const canReadTrades = me?.permissions.includes("trades.read") === true;
   const coins = useQuery({
     queryKey: ["coins"],
     queryFn: fetchCoins,
@@ -36,6 +41,16 @@ export function OperatorPage() {
     queryKey: ["bots"],
     queryFn: fetchBots,
     enabled: me != null,
+  });
+  const positions = useQuery({
+    queryKey: ["positions"],
+    queryFn: fetchPositions,
+    enabled: canReadTrades,
+  });
+  const trades = useQuery({
+    queryKey: ["trades"],
+    queryFn: fetchTrades,
+    enabled: canReadTrades,
   });
   const signOut = useMutation({
     mutationFn: logout,
@@ -56,7 +71,6 @@ export function OperatorPage() {
   }
 
   const canControl = me.permissions.includes("bots.control");
-  const canReadTrades = me.permissions.includes("trades.read");
 
   return (
     <main className="min-h-svh bg-background text-foreground">
@@ -84,10 +98,24 @@ export function OperatorPage() {
         </section>
 
         {canReadTrades ? (
-          <section className="space-y-3">
-            <h2 className="text-lg font-medium">Quote</h2>
-            <QuoteForm coins={coins.data} />
-          </section>
+          <>
+            <section className="space-y-3">
+              <h2 className="text-lg font-medium">Quote</h2>
+              <QuoteForm coins={coins.data} />
+            </section>
+            <section className="space-y-3">
+              <h2 className="text-lg font-medium">Positions</h2>
+              <PositionTable
+                positions={positions.data}
+                error={positions.error}
+                loading={positions.isLoading}
+              />
+            </section>
+            <section className="space-y-3">
+              <h2 className="text-lg font-medium">Trades</h2>
+              <TradeTable trades={trades.data} error={trades.error} loading={trades.isLoading} />
+            </section>
+          </>
         ) : null}
 
         <section className="space-y-3">
@@ -288,6 +316,110 @@ function QuoteForm({ coins }: { coins: Coin[] | undefined }) {
         </dl>
       ) : null}
     </form>
+  );
+}
+
+function PositionTable({
+  positions,
+  error,
+  loading,
+}: {
+  positions: Position[] | undefined;
+  error: unknown;
+  loading: boolean;
+}) {
+  if (loading) {
+    return <p className="text-sm text-muted-foreground">Loading positions…</p>;
+  }
+  if (error) {
+    return (
+      <p role="alert" className="text-sm text-destructive">
+        {messageOf(error)}
+      </p>
+    );
+  }
+  if (!positions || positions.length === 0) {
+    return <p className="text-sm text-muted-foreground">No positions.</p>;
+  }
+  return (
+    <div className="overflow-x-auto rounded-xl border">
+      <table className="w-full min-w-[48rem] text-left text-sm">
+        <thead className="bg-muted text-muted-foreground">
+          <tr>
+            <th className="px-3 py-2 font-medium">Bot id</th>
+            <th className="px-3 py-2 font-medium">Coin address</th>
+            <th className="px-3 py-2 font-medium">Size</th>
+            <th className="px-3 py-2 font-medium">Cost (SOL)</th>
+            <th className="px-3 py-2 font-medium">Realized PnL (SOL)</th>
+          </tr>
+        </thead>
+        <tbody>
+          {positions.map((position) => (
+            <tr key={position.bot_id} className="border-t">
+              <td className="px-3 py-2">{position.bot_id}</td>
+              <td className="px-3 py-2 font-mono text-xs break-all">{position.coin_address}</td>
+              <td className="px-3 py-2 font-mono">{position.size}</td>
+              <td className="px-3 py-2 font-mono">{position.cost_native}</td>
+              <td className="px-3 py-2 font-mono">{position.realized_pnl_native}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function TradeTable({
+  trades,
+  error,
+  loading,
+}: {
+  trades: Trade[] | undefined;
+  error: unknown;
+  loading: boolean;
+}) {
+  if (loading) {
+    return <p className="text-sm text-muted-foreground">Loading trades…</p>;
+  }
+  if (error) {
+    return (
+      <p role="alert" className="text-sm text-destructive">
+        {messageOf(error)}
+      </p>
+    );
+  }
+  if (!trades || trades.length === 0) {
+    return <p className="text-sm text-muted-foreground">No trades.</p>;
+  }
+  return (
+    <div className="overflow-x-auto rounded-xl border">
+      <table className="w-full min-w-[56rem] text-left text-sm">
+        <thead className="bg-muted text-muted-foreground">
+          <tr>
+            <th className="px-3 py-2 font-medium">Time</th>
+            <th className="px-3 py-2 font-medium">Side</th>
+            <th className="px-3 py-2 font-medium">Coin address</th>
+            <th className="px-3 py-2 font-medium">Amount (SOL)</th>
+            <th className="px-3 py-2 font-medium">Fee (SOL)</th>
+            <th className="px-3 py-2 font-medium">Price impact</th>
+            <th className="px-3 py-2 font-medium">Paper</th>
+          </tr>
+        </thead>
+        <tbody>
+          {trades.map((trade) => (
+            <tr key={trade.id} className="border-t">
+              <td className="px-3 py-2 whitespace-nowrap">{trade.ts}</td>
+              <td className="px-3 py-2">{trade.side}</td>
+              <td className="px-3 py-2 font-mono text-xs break-all">{trade.coin_address}</td>
+              <td className="px-3 py-2 font-mono">{trade.amount_native}</td>
+              <td className="px-3 py-2 font-mono">{trade.fee_native}</td>
+              <td className="px-3 py-2 font-mono">{trade.price_impact_pct}%</td>
+              <td className="px-3 py-2">{trade.paper ? "yes" : "no"}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
   );
 }
 
