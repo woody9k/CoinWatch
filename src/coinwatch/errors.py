@@ -83,3 +83,7 @@ class ChainReadError(CoinWatchError):
         self.failure = failure
         self.mint = mint
         super().__init__(failure)
+
+
+class StrategyError(CoinWatchError):
+    """A strategy document is not a single list of allowed comparisons."""
