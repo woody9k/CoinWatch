@@ -135,7 +135,11 @@ class Strategy(Base):
 
 
 class Bot(Base):
-    """Strategy bound to one coin and one wallet."""
+    """Strategy bound to one coin and one wallet.
+
+    ``armed_rules`` is a JSON list of rule indexes whose comparison is already
+    true. Null means nothing is armed.
+    """
 
     __tablename__ = "bots"
     __table_args__ = (
@@ -155,6 +159,7 @@ class Bot(Base):
     act_on_inference: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
     created_by: Mapped[int] = mapped_column(ForeignKey("users.id"))
     created_at: Mapped[datetime] = mapped_column(UtcDateTime)
+    armed_rules: Mapped[str | None] = mapped_column(Text, default=None)
 
 
 class Position(Base):
