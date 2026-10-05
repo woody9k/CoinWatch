@@ -4,10 +4,12 @@ import {
   fetchBots,
   fetchCoins,
   logout,
+  previewQuote,
   transitionBot,
   type Bot,
   type BotAction,
   type Coin,
+  type QuotePreview,
   type Tick,
 } from "@/lib/resources.ts";
 import { useSession } from "@/session.ts";
@@ -54,6 +56,7 @@ export function OperatorPage() {
   }
 
   const canControl = me.permissions.includes("bots.control");
+  const canReadTrades = me.permissions.includes("trades.read");
 
   return (
     <main className="min-h-svh bg-background text-foreground">
@@ -79,6 +82,13 @@ export function OperatorPage() {
           <h2 className="text-lg font-medium">Coins</h2>
           <CoinTable coins={coins.data} error={coins.error} loading={coins.isLoading} />
         </section>
+
+        {canReadTrades ? (
+          <section className="space-y-3">
+            <h2 className="text-lg font-medium">Quote</h2>
+            <QuoteForm coins={coins.data} />
+          </section>
+        ) : null}
 
         <section className="space-y-3">
           <h2 className="text-lg font-medium">Bots</h2>
@@ -143,6 +153,141 @@ function CoinTable({
         </tbody>
       </table>
     </div>
+  );
+}
+
+function QuoteForm({ coins }: { coins: Coin[] | undefined }) {
+  const firstAddress = coins?.[0]?.address ?? "";
+  const [address, setAddress] = useState("");
+  const [addressEdited, setAddressEdited] = useState(false);
+  const [side, setSide] = useState<"buy" | "sell">("buy");
+  const [amount, setAmount] = useState("");
+  const [positionSize, setPositionSize] = useState("");
+  const [result, setResult] = useState<QuotePreview | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [pending, setPending] = useState(false);
+  const coinAddress = addressEdited ? address : firstAddress;
+
+  async function onPreview() {
+    setError(null);
+    setResult(null);
+    setPending(true);
+    try {
+      const preview = await previewQuote({
+        side,
+        coin_address: coinAddress,
+        amount,
+        position_size: side === "sell" ? positionSize : undefined,
+      });
+      setResult(preview);
+    } catch (caught) {
+      setError(messageOf(caught));
+    } finally {
+      setPending(false);
+    }
+  }
+
+  return (
+    <form
+      onSubmit={(event) => {
+        event.preventDefault();
+        void onPreview();
+      }}
+      className="max-w-xl space-y-3 rounded-xl border p-4"
+    >
+      <p className="text-sm text-muted-foreground">Preview only. Nothing is sent.</p>
+      <label className="block space-y-1 text-sm">
+        <span>Coin address</span>
+        <input
+          name="coin_address"
+          list="quote-coins"
+          value={coinAddress}
+          onChange={(event) => {
+            setAddressEdited(true);
+            setAddress(event.target.value);
+          }}
+          className="w-full rounded-md border bg-background px-3 py-2 font-mono text-xs"
+        />
+        <datalist id="quote-coins">
+          {(coins ?? []).map((coin) => (
+            <option key={`${coin.chain}:${coin.address}`} value={coin.address}>
+              {coin.symbol}
+            </option>
+          ))}
+        </datalist>
+      </label>
+      <div className="grid gap-3 sm:grid-cols-2">
+        <label className="block space-y-1 text-sm">
+          <span>Side</span>
+          <select
+            name="side"
+            value={side}
+            onChange={(event) => {
+              const next = event.target.value === "sell" ? "sell" : "buy";
+              setSide(next);
+            }}
+            className="w-full rounded-md border bg-background px-3 py-2"
+          >
+            <option value="buy">Buy</option>
+            <option value="sell">Sell</option>
+          </select>
+        </label>
+        <label className="block space-y-1 text-sm">
+          <span>{side === "buy" ? "Amount (SOL)" : "Amount (tokens)"}</span>
+          <input
+            name="amount"
+            inputMode="decimal"
+            value={amount}
+            onChange={(event) => setAmount(event.target.value)}
+            className="w-full rounded-md border bg-background px-3 py-2"
+          />
+        </label>
+      </div>
+      {side === "sell" ? (
+        <label className="block space-y-1 text-sm">
+          <span>Position size (tokens)</span>
+          <input
+            name="position_size"
+            inputMode="decimal"
+            value={positionSize}
+            onChange={(event) => setPositionSize(event.target.value)}
+            className="w-full rounded-md border bg-background px-3 py-2"
+          />
+        </label>
+      ) : null}
+      <button
+        type="submit"
+        disabled={pending}
+        className="rounded-md border px-3 py-1.5 disabled:opacity-50"
+      >
+        Preview
+      </button>
+      {error ? (
+        <p role="alert" className="text-sm text-destructive">
+          {error}
+        </p>
+      ) : null}
+      {result ? (
+        <dl className="grid gap-2 text-sm sm:grid-cols-2">
+          <div>
+            <dt className="text-muted-foreground">Expected out</dt>
+            <dd className="font-mono">{result.expected_out}</dd>
+          </div>
+          <div>
+            <dt className="text-muted-foreground">Minimum out</dt>
+            <dd className="font-mono">{result.minimum_out}</dd>
+          </div>
+          <div>
+            <dt className="text-muted-foreground">Fee (SOL)</dt>
+            <dd className="font-mono">{result.fee_native}</dd>
+          </div>
+          <div>
+            <dt className="text-muted-foreground">Price impact</dt>
+            <dd className="font-mono">{result.price_impact_pct}%</dd>
+          </div>
+        </dl>
+      ) : null}
+    </form>
   );
 }
 

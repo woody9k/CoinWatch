@@ -302,11 +302,13 @@ def create_app(alert_sender: AlertSender | None = None) -> FastAPI:
     # Import after this module defines the helpers the router calls.
     from coinwatch.api.alerts import router as alerts_router
     from coinwatch.api.controls import router as controls_router
+    from coinwatch.api.quotes import router as quotes_router
     from coinwatch.api.reads import router as reads_router
 
     app.include_router(reads_router)
     app.include_router(alerts_router)
     app.include_router(controls_router)
+    app.include_router(quotes_router)
     return app
 
 
