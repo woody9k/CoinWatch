@@ -45,6 +45,37 @@ export type Bot = {
 
 export type BotAction = "start" | "pause" | "stop";
 
+export type Wallet = {
+  id: number;
+  chain: string;
+  label: string;
+  public_address: string;
+};
+
+export type Strategy = {
+  id: number;
+  name: string;
+  yaml_config: string;
+};
+
+export type WalletCreate = {
+  chain: string;
+  label: string;
+  public_address: string;
+};
+
+export type StrategyCreate = {
+  name: string;
+  yaml_config: string;
+};
+
+export type BotCreate = {
+  chain: string;
+  coin_address: string;
+  strategy_id: number;
+  wallet_id: number;
+};
+
 export async function fetchMe(): Promise<SessionUser> {
   const payload = await apiGet("/api/me");
   if (!isRecord(payload)) {
@@ -111,6 +142,55 @@ export async function fetchTrades(): Promise<Trade[]> {
     throw unexpected();
   }
   return payload.map(parseTrade);
+}
+
+export async function fetchWallets(): Promise<Wallet[]> {
+  const payload = await apiGet("/api/wallets");
+  if (!Array.isArray(payload)) {
+    throw unexpected();
+  }
+  return payload.map(parseWallet);
+}
+
+export async function fetchStrategies(): Promise<Strategy[]> {
+  const payload = await apiGet("/api/strategies");
+  if (!Array.isArray(payload)) {
+    throw unexpected();
+  }
+  return payload.map(parseStrategy);
+}
+
+export async function createWallet(input: WalletCreate): Promise<Wallet> {
+  const payload = await apiPost("/api/wallets", {
+    chain: input.chain,
+    label: input.label,
+    public_address: input.public_address,
+  });
+  return parseWallet(payload);
+}
+
+export async function createStrategy(input: StrategyCreate): Promise<{ id: number; name: string }> {
+  const payload = await apiPost("/api/strategies", {
+    name: input.name,
+    yaml_config: input.yaml_config,
+  });
+  if (!isRecord(payload)) {
+    throw unexpected();
+  }
+  return {
+    id: requireNumber(payload, "id"),
+    name: requireString(payload, "name"),
+  };
+}
+
+export async function createBot(input: BotCreate): Promise<Bot> {
+  const payload = await apiPost("/api/bots", {
+    chain: input.chain,
+    coin_address: input.coin_address,
+    strategy_id: input.strategy_id,
+    wallet_id: input.wallet_id,
+  });
+  return parseBot(payload);
 }
 
 export async function fetchBots(): Promise<Bot[]> {
@@ -213,6 +293,29 @@ function parseTrade(value: unknown): Trade {
     fee_native: requireString(value, "fee_native"),
     price_impact_pct: requireString(value, "price_impact_pct"),
     paper: requireBoolean(value, "paper"),
+  };
+}
+
+function parseWallet(value: unknown): Wallet {
+  if (!isRecord(value)) {
+    throw unexpected();
+  }
+  return {
+    id: requireNumber(value, "id"),
+    chain: requireString(value, "chain"),
+    label: requireString(value, "label"),
+    public_address: requireString(value, "public_address"),
+  };
+}
+
+function parseStrategy(value: unknown): Strategy {
+  if (!isRecord(value)) {
+    throw unexpected();
+  }
+  return {
+    id: requireNumber(value, "id"),
+    name: requireString(value, "name"),
+    yaml_config: requireString(value, "yaml_config"),
   };
 }
 

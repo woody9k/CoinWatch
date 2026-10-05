@@ -1,10 +1,15 @@
 import { cn } from "@/lib/utils.ts";
 import { ApiError } from "@/lib/api.ts";
 import {
+  createBot,
+  createStrategy,
+  createWallet,
   fetchBots,
   fetchCoins,
   fetchPositions,
+  fetchStrategies,
   fetchTrades,
+  fetchWallets,
   logout,
   previewQuote,
   transitionBot,
@@ -13,13 +18,20 @@ import {
   type Coin,
   type Position,
   type QuotePreview,
+  type Strategy,
   type Tick,
   type Trade,
+  type Wallet,
 } from "@/lib/resources.ts";
 import { useSession } from "@/session.ts";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { Navigate } from "react-router-dom";
+
+const STRATEGY_PLACEHOLDER = `rules:
+  - trigger: mcap_usd > 10000
+    action: buy
+    amount_native: 0.05`;
 
 const ACTIONS: Record<BotAction, { label: string; statuses: string[] }> = {
   start: { label: "Start", statuses: ["paused", "stopped"] },
@@ -32,6 +44,8 @@ export function OperatorPage() {
   const queryClient = useQueryClient();
   const me = session.data;
   const canReadTrades = me?.permissions.includes("trades.read") === true;
+  const canReadStrategies = me?.permissions.includes("strategies.read") === true;
+  const canReadWallets = me?.permissions.includes("wallets.read") === true;
   const coins = useQuery({
     queryKey: ["coins"],
     queryFn: fetchCoins,
@@ -41,6 +55,16 @@ export function OperatorPage() {
     queryKey: ["bots"],
     queryFn: fetchBots,
     enabled: me != null,
+  });
+  const strategies = useQuery({
+    queryKey: ["strategies"],
+    queryFn: fetchStrategies,
+    enabled: canReadStrategies,
+  });
+  const wallets = useQuery({
+    queryKey: ["wallets"],
+    queryFn: fetchWallets,
+    enabled: canReadWallets,
   });
   const positions = useQuery({
     queryKey: ["positions"],
@@ -71,6 +95,9 @@ export function OperatorPage() {
   }
 
   const canControl = me.permissions.includes("bots.control");
+  const canManageWallets = me.permissions.includes("wallets.manage");
+  const canWriteStrategies = me.permissions.includes("strategies.write");
+  const showSetup = canManageWallets || canWriteStrategies || canControl;
 
   return (
     <main className="min-h-svh bg-background text-foreground">
@@ -116,6 +143,25 @@ export function OperatorPage() {
               <TradeTable trades={trades.data} error={trades.error} loading={trades.isLoading} />
             </section>
           </>
+        ) : null}
+
+        {showSetup ? (
+          <section className="space-y-3">
+            <h2 className="text-lg font-medium">Setup</h2>
+            <div className="grid gap-4 lg:grid-cols-3">
+              {canManageWallets ? <WalletSetupForm /> : null}
+              {canWriteStrategies ? <StrategySetupForm /> : null}
+              {canControl ? (
+                <BotSetupForm
+                  coins={coins.data}
+                  strategies={strategies.data}
+                  wallets={wallets.data}
+                  strategiesError={strategies.error}
+                  walletsError={wallets.error}
+                />
+              ) : null}
+            </div>
+          </section>
         ) : null}
 
         <section className="space-y-3">
@@ -314,6 +360,283 @@ function QuoteForm({ coins }: { coins: Coin[] | undefined }) {
             <dd className="font-mono">{result.price_impact_pct}%</dd>
           </div>
         </dl>
+      ) : null}
+    </form>
+  );
+}
+
+function WalletSetupForm() {
+  const queryClient = useQueryClient();
+  const [chain, setChain] = useState("solana");
+  const [label, setLabel] = useState("");
+  const [publicAddress, setPublicAddress] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const create = useMutation({
+    mutationFn: createWallet,
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["wallets"] });
+    },
+  });
+
+  async function onSubmit() {
+    setError(null);
+    try {
+      await create.mutateAsync({
+        chain,
+        label,
+        public_address: publicAddress,
+      });
+      setLabel("");
+      setPublicAddress("");
+    } catch (caught) {
+      setError(messageOf(caught));
+    }
+  }
+
+  return (
+    <form
+      onSubmit={(event) => {
+        event.preventDefault();
+        void onSubmit();
+      }}
+      className="space-y-3 rounded-xl border p-4"
+    >
+      <h3 className="text-sm font-medium">Wallet</h3>
+      <label className="block space-y-1 text-sm">
+        <span>Chain</span>
+        <input
+          name="chain"
+          value={chain}
+          onChange={(event) => setChain(event.target.value)}
+          className="w-full rounded-md border bg-background px-3 py-2"
+        />
+      </label>
+      <label className="block space-y-1 text-sm">
+        <span>Label</span>
+        <input
+          name="label"
+          value={label}
+          onChange={(event) => setLabel(event.target.value)}
+          className="w-full rounded-md border bg-background px-3 py-2"
+        />
+      </label>
+      <label className="block space-y-1 text-sm">
+        <span>Public address</span>
+        <input
+          name="public_address"
+          value={publicAddress}
+          onChange={(event) => setPublicAddress(event.target.value)}
+          className="w-full rounded-md border bg-background px-3 py-2 font-mono text-xs"
+        />
+      </label>
+      <button
+        type="submit"
+        disabled={create.isPending}
+        className="rounded-md border px-3 py-1.5 disabled:opacity-50"
+      >
+        Create wallet
+      </button>
+      {error ? (
+        <p role="alert" className="text-sm text-destructive">
+          {error}
+        </p>
+      ) : null}
+    </form>
+  );
+}
+
+function StrategySetupForm() {
+  const queryClient = useQueryClient();
+  const [name, setName] = useState("");
+  const [yamlConfig, setYamlConfig] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const create = useMutation({
+    mutationFn: createStrategy,
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["strategies"] });
+    },
+  });
+
+  async function onSubmit() {
+    setError(null);
+    try {
+      await create.mutateAsync({ name, yaml_config: yamlConfig });
+      setName("");
+      setYamlConfig("");
+    } catch (caught) {
+      setError(messageOf(caught));
+    }
+  }
+
+  return (
+    <form
+      onSubmit={(event) => {
+        event.preventDefault();
+        void onSubmit();
+      }}
+      className="space-y-3 rounded-xl border p-4"
+    >
+      <h3 className="text-sm font-medium">Strategy</h3>
+      <label className="block space-y-1 text-sm">
+        <span>Name</span>
+        <input
+          name="name"
+          value={name}
+          onChange={(event) => setName(event.target.value)}
+          className="w-full rounded-md border bg-background px-3 py-2"
+        />
+      </label>
+      <label className="block space-y-1 text-sm">
+        <span>YAML</span>
+        <textarea
+          name="yaml_config"
+          value={yamlConfig}
+          placeholder={STRATEGY_PLACEHOLDER}
+          onChange={(event) => setYamlConfig(event.target.value)}
+          rows={8}
+          className="w-full rounded-md border bg-background px-3 py-2 font-mono text-xs"
+        />
+      </label>
+      <button
+        type="submit"
+        disabled={create.isPending}
+        className="rounded-md border px-3 py-1.5 disabled:opacity-50"
+      >
+        Create strategy
+      </button>
+      {error ? (
+        <p role="alert" className="text-sm text-destructive">
+          {error}
+        </p>
+      ) : null}
+    </form>
+  );
+}
+
+function BotSetupForm({
+  coins,
+  strategies,
+  wallets,
+  strategiesError,
+  walletsError,
+}: {
+  coins: Coin[] | undefined;
+  strategies: Strategy[] | undefined;
+  wallets: Wallet[] | undefined;
+  strategiesError: unknown;
+  walletsError: unknown;
+}) {
+  const queryClient = useQueryClient();
+  const firstAddress = coins?.[0]?.address ?? "";
+  const [chain, setChain] = useState("solana");
+  const [address, setAddress] = useState("");
+  const [addressEdited, setAddressEdited] = useState(false);
+  const [strategyId, setStrategyId] = useState("");
+  const [walletId, setWalletId] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const coinAddress = addressEdited ? address : firstAddress;
+  const selectedStrategy = strategyId || (strategies?.[0] ? String(strategies[0].id) : "");
+  const selectedWallet = walletId || (wallets?.[0] ? String(wallets[0].id) : "");
+  const create = useMutation({
+    mutationFn: createBot,
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["bots"] });
+    },
+  });
+
+  async function onSubmit() {
+    setError(null);
+    try {
+      await create.mutateAsync({
+        chain,
+        coin_address: coinAddress,
+        strategy_id: Number(selectedStrategy),
+        wallet_id: Number(selectedWallet),
+      });
+    } catch (caught) {
+      setError(messageOf(caught));
+    }
+  }
+
+  const listError = strategiesError ?? walletsError;
+
+  return (
+    <form
+      onSubmit={(event) => {
+        event.preventDefault();
+        void onSubmit();
+      }}
+      className="space-y-3 rounded-xl border p-4"
+    >
+      <h3 className="text-sm font-medium">Paper bot</h3>
+      <p className="text-sm text-muted-foreground">Creates a paused paper bot.</p>
+      <label className="block space-y-1 text-sm">
+        <span>Chain</span>
+        <input
+          name="chain"
+          value={chain}
+          onChange={(event) => setChain(event.target.value)}
+          className="w-full rounded-md border bg-background px-3 py-2"
+        />
+      </label>
+      <label className="block space-y-1 text-sm">
+        <span>Coin address</span>
+        <input
+          name="coin_address"
+          value={coinAddress}
+          onChange={(event) => {
+            setAddressEdited(true);
+            setAddress(event.target.value);
+          }}
+          className="w-full rounded-md border bg-background px-3 py-2 font-mono text-xs"
+        />
+      </label>
+      <label className="block space-y-1 text-sm">
+        <span>Strategy</span>
+        <select
+          name="strategy_id"
+          value={selectedStrategy}
+          onChange={(event) => setStrategyId(event.target.value)}
+          className="w-full rounded-md border bg-background px-3 py-2"
+        >
+          {(strategies ?? []).map((strategy) => (
+            <option key={strategy.id} value={strategy.id}>
+              {strategy.name}
+            </option>
+          ))}
+        </select>
+      </label>
+      <label className="block space-y-1 text-sm">
+        <span>Wallet</span>
+        <select
+          name="wallet_id"
+          value={selectedWallet}
+          onChange={(event) => setWalletId(event.target.value)}
+          className="w-full rounded-md border bg-background px-3 py-2"
+        >
+          {(wallets ?? []).map((wallet) => (
+            <option key={wallet.id} value={wallet.id}>
+              {wallet.label}
+            </option>
+          ))}
+        </select>
+      </label>
+      <button
+        type="submit"
+        disabled={create.isPending}
+        className="rounded-md border px-3 py-1.5 disabled:opacity-50"
+      >
+        Create bot
+      </button>
+      {listError ? (
+        <p role="alert" className="text-sm text-destructive">
+          {messageOf(listError)}
+        </p>
+      ) : null}
+      {error ? (
+        <p role="alert" className="text-sm text-destructive">
+          {error}
+        </p>
       ) : null}
     </form>
   );
