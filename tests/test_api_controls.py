@@ -6,6 +6,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from coinwatch.authz import permissions_for
 from coinwatch.db.models import AuditEvent, Bot, Chain, Coin, Strategy, User, Wallet
 from coinwatch.db.session import create_engine
 from coinwatch.services.identity import create_session
@@ -183,6 +184,57 @@ def test_live_bot_is_rejected(api_client: TestClient) -> None:
     assert response.json()["error"]["code"] == "live_disabled"
     with _session() as db:
         assert db.scalars(select(Bot)).all() == []
+
+
+def test_wallets_require_a_session(api_client: TestClient) -> None:
+    """GET /api/wallets without a session cookie is 401."""
+    response = api_client.get("/api/wallets")
+    assert response.status_code == 401
+    assert response.json()["error"]["code"] == "unauthenticated"
+
+
+def test_role_without_wallets_read_is_denied(api_client: TestClient) -> None:
+    """A role that lacks wallets.read is 403 before any wallet lookup.
+
+    ``permissions_for("viewer")`` includes ``wallets.read`` because that
+    permission ends in ``.read``. This caller uses a role that grants nothing.
+    """
+    assert "wallets.read" not in permissions_for("custom")
+    assert "wallets.read" in permissions_for("viewer")
+    _use_session(api_client, _session_for_role("custom", "narrow"))
+    response = api_client.get("/api/wallets")
+    assert response.status_code == 403
+    assert response.json()["error"]["code"] == "not_authorized"
+    with _session() as db:
+        denied = db.scalars(select(AuditEvent).where(AuditEvent.action == "auth.denied")).all()
+        assert len(denied) == 1
+        assert denied[0].result == "denied"
+        assert denied[0].detail == "wallets.read"
+        assert db.scalars(select(Wallet)).all() == []
+
+
+def test_viewer_lists_a_seeded_public_wallet(api_client: TestClient) -> None:
+    """A viewer sees one public wallet, and the JSON keys are only the public fields."""
+    _seed_public_wallet()
+    _use_session(api_client, _session_for_role("viewer", "vera"))
+    response = api_client.get("/api/wallets")
+    assert response.status_code == 200
+    listed = response.json()
+    assert len(listed) == 1
+    wallet = listed[0]
+    assert set(wallet) == {"id", "chain", "label", "public_address"}
+    assert wallet["chain"] == "solana"
+    assert wallet["label"] == "desk"
+    assert wallet["public_address"] == PUBLIC
+    assert type(wallet["id"]) is int
+
+
+def test_wallet_list_is_empty(api_client: TestClient) -> None:
+    """An authorized caller with no wallets gets an empty list, not 404."""
+    _login(api_client)
+    response = api_client.get("/api/wallets")
+    assert response.status_code == 200
+    assert response.json() == []
 
 
 def test_wallet_private_key_is_rejected(api_client: TestClient) -> None:
@@ -366,6 +418,23 @@ def _session_for_role(role: str, username: str) -> str:
         token = create_session(db, user)
         db.commit()
         return token
+
+
+def _seed_public_wallet() -> None:
+    """Insert one public wallet owned by the bootstrap admin."""
+    with _session() as db:
+        admin = db.scalar(select(User).where(User.username == ADMIN_USER))
+        assert admin is not None
+        db.add(
+            Wallet(
+                chain="solana",
+                label="desk",
+                public_address=PUBLIC,
+                created_by=admin.id,
+                created_at=datetime.now(UTC),
+            )
+        )
+        db.commit()
 
 
 def _seed_coin() -> None:

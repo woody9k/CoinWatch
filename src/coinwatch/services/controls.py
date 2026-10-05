@@ -89,6 +89,24 @@ def create_wallet(
     return wallet
 
 
+def list_wallets(session: Session, actor: User, *, request_id: str) -> list[Wallet]:
+    """Return public wallets in id order.
+
+    Requires ``wallets.read`` before the query. Does not change rows. The
+    stored columns are the public address and label; key material is not a
+    column on ``wallets``.
+    """
+    require_permission(
+        session,
+        actor,
+        "wallets.read",
+        entity_type="wallet",
+        entity_id="",
+        request_id=request_id,
+    )
+    return list(session.scalars(select(Wallet).order_by(Wallet.id)).all())
+
+
 def create_strategy(
     session: Session,
     actor: User,

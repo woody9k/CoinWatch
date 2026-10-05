@@ -1,7 +1,7 @@
 """Paper wallet, strategy, and bot control routes.
 
-Each route requires a live session and checks its permission before a write.
-These routes do not step a bot, send alerts, or accept private keys.
+Each route requires a live session and checks its permission before a query
+or a write. These routes do not step a bot, send alerts, or accept private keys.
 """
 
 import json
@@ -20,6 +20,7 @@ from coinwatch.services.controls import (
     create_wallet,
     list_bots,
     list_strategies,
+    list_wallets,
     transition_bot,
 )
 from coinwatch.services.identity import get_session_user
@@ -47,6 +48,20 @@ async def post_wallet(request: Request) -> Response:
     except RequestRejected as exc:
         return _rejection(exc)
     return JSONResponse(content=_wallet_item(wallet))
+
+
+async def get_wallets(request: Request) -> Response:
+    """Return id, chain, label, and public_address for each wallet.
+
+    Requires ``wallets.read`` before the query. An empty table is an empty
+    list. No other fields are included.
+    """
+    opened = _session_user(request)
+    if isinstance(opened, JSONResponse):
+        return opened
+    db, user = opened
+    rows = list_wallets(db, user, request_id=request_id_of(request))
+    return JSONResponse(content=[_wallet_item(row) for row in rows])
 
 
 async def post_strategy(request: Request) -> Response:
@@ -223,6 +238,7 @@ def _bot_item(bot: Bot) -> dict[str, object]:
     }
 
 
+router.get("/api/wallets")(get_wallets)
 router.post("/api/wallets")(post_wallet)
 router.post("/api/strategies")(post_strategy)
 router.get("/api/strategies")(get_strategies)
