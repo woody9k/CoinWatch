@@ -2,11 +2,13 @@ import { cn } from "@/lib/utils.ts";
 import { ApiError } from "@/lib/api.ts";
 import {
   createBot,
+  createPriceAlert,
   createStrategy,
   createWallet,
   fetchBots,
   fetchCoins,
   fetchPositions,
+  fetchPriceAlerts,
   fetchStrategies,
   fetchTrades,
   fetchWallets,
@@ -17,6 +19,8 @@ import {
   type BotAction,
   type Coin,
   type Position,
+  type PriceAlert,
+  type PriceAlertCondition,
   type QuotePreview,
   type Strategy,
   type Tick,
@@ -33,6 +37,8 @@ const STRATEGY_PLACEHOLDER = `rules:
     action: buy
     amount_native: 0.05`;
 
+const PRICE_ALERT_CONDITIONS: PriceAlertCondition[] = ["mcap_usd_above", "mcap_usd_below"];
+
 const ACTIONS: Record<BotAction, { label: string; statuses: string[] }> = {
   start: { label: "Start", statuses: ["paused", "stopped"] },
   pause: { label: "Pause", statuses: ["running"] },
@@ -46,6 +52,7 @@ export function OperatorPage() {
   const canReadTrades = me?.permissions.includes("trades.read") === true;
   const canReadStrategies = me?.permissions.includes("strategies.read") === true;
   const canReadWallets = me?.permissions.includes("wallets.read") === true;
+  const canReadAlerts = me?.permissions.includes("alerts.read") === true;
   const coins = useQuery({
     queryKey: ["coins"],
     queryFn: fetchCoins,
@@ -76,6 +83,11 @@ export function OperatorPage() {
     queryFn: fetchTrades,
     enabled: canReadTrades,
   });
+  const priceAlerts = useQuery({
+    queryKey: ["price-alerts"],
+    queryFn: fetchPriceAlerts,
+    enabled: canReadAlerts,
+  });
   const signOut = useMutation({
     mutationFn: logout,
     onSettled: async () => {
@@ -97,6 +109,7 @@ export function OperatorPage() {
   const canControl = me.permissions.includes("bots.control");
   const canManageWallets = me.permissions.includes("wallets.manage");
   const canWriteStrategies = me.permissions.includes("strategies.write");
+  const canManageAlerts = me.permissions.includes("alerts.manage");
   const showSetup = canManageWallets || canWriteStrategies || canControl;
 
   return (
@@ -123,6 +136,18 @@ export function OperatorPage() {
           <h2 className="text-lg font-medium">Coins</h2>
           <CoinTable coins={coins.data} error={coins.error} loading={coins.isLoading} />
         </section>
+
+        {canReadAlerts ? (
+          <section className="space-y-3">
+            <h2 className="text-lg font-medium">Price alerts</h2>
+            {canManageAlerts ? <PriceAlertForm coins={coins.data} /> : null}
+            <PriceAlertTable
+              alerts={priceAlerts.data}
+              error={priceAlerts.error}
+              loading={priceAlerts.isLoading}
+            />
+          </section>
+        ) : null}
 
         {canReadTrades ? (
           <>
@@ -362,6 +387,164 @@ function QuoteForm({ coins }: { coins: Coin[] | undefined }) {
         </dl>
       ) : null}
     </form>
+  );
+}
+
+function PriceAlertForm({ coins }: { coins: Coin[] | undefined }) {
+  const queryClient = useQueryClient();
+  const firstAddress = coins?.[0]?.address ?? "";
+  const [chain, setChain] = useState("solana");
+  const [address, setAddress] = useState("");
+  const [addressEdited, setAddressEdited] = useState(false);
+  const [condition, setCondition] = useState<PriceAlertCondition>("mcap_usd_above");
+  const [threshold, setThreshold] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const coinAddress = addressEdited ? address : firstAddress;
+  const create = useMutation({
+    mutationFn: createPriceAlert,
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["price-alerts"] });
+    },
+  });
+
+  async function onSubmit() {
+    setError(null);
+    try {
+      await create.mutateAsync({
+        chain,
+        coin_address: coinAddress,
+        condition,
+        threshold,
+      });
+      setThreshold("");
+    } catch (caught) {
+      setError(messageOf(caught));
+    }
+  }
+
+  return (
+    <form
+      onSubmit={(event) => {
+        event.preventDefault();
+        void onSubmit();
+      }}
+      className="max-w-xl space-y-3 rounded-xl border p-4"
+    >
+      <p className="text-sm text-muted-foreground">Saves an alert. Nothing is sent.</p>
+      <label className="block space-y-1 text-sm">
+        <span>Chain</span>
+        <input
+          name="chain"
+          value={chain}
+          onChange={(event) => setChain(event.target.value)}
+          className="w-full rounded-md border bg-background px-3 py-2"
+        />
+      </label>
+      <label className="block space-y-1 text-sm">
+        <span>Coin address</span>
+        <input
+          name="coin_address"
+          value={coinAddress}
+          onChange={(event) => {
+            setAddressEdited(true);
+            setAddress(event.target.value);
+          }}
+          className="w-full rounded-md border bg-background px-3 py-2 font-mono text-xs"
+        />
+      </label>
+      <div className="grid gap-3 sm:grid-cols-2">
+        <label className="block space-y-1 text-sm">
+          <span>Condition</span>
+          <select
+            name="condition"
+            value={condition}
+            onChange={(event) => {
+              const next = event.target.value;
+              if (next === "mcap_usd_above" || next === "mcap_usd_below") {
+                setCondition(next);
+              }
+            }}
+            className="w-full rounded-md border bg-background px-3 py-2"
+          >
+            {PRICE_ALERT_CONDITIONS.map((value) => (
+              <option key={value} value={value}>
+                {value}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="block space-y-1 text-sm">
+          <span>Threshold</span>
+          <input
+            name="threshold"
+            inputMode="decimal"
+            value={threshold}
+            onChange={(event) => setThreshold(event.target.value)}
+            className="w-full rounded-md border bg-background px-3 py-2"
+          />
+        </label>
+      </div>
+      <button
+        type="submit"
+        disabled={create.isPending}
+        className="rounded-md border px-3 py-1.5 disabled:opacity-50"
+      >
+        Save alert
+      </button>
+      {error ? (
+        <p role="alert" className="text-sm text-destructive">
+          {error}
+        </p>
+      ) : null}
+    </form>
+  );
+}
+
+function PriceAlertTable({
+  alerts,
+  error,
+  loading,
+}: {
+  alerts: PriceAlert[] | undefined;
+  error: unknown;
+  loading: boolean;
+}) {
+  if (loading) {
+    return <p className="text-sm text-muted-foreground">Loading price alerts…</p>;
+  }
+  if (error) {
+    return (
+      <p role="alert" className="text-sm text-destructive">
+        {messageOf(error)}
+      </p>
+    );
+  }
+  if (!alerts || alerts.length === 0) {
+    return <p className="text-sm text-muted-foreground">No price alerts.</p>;
+  }
+  return (
+    <div className="overflow-x-auto rounded-xl border">
+      <table className="w-full min-w-[40rem] text-left text-sm">
+        <thead className="bg-muted text-muted-foreground">
+          <tr>
+            <th className="px-3 py-2 font-medium">Condition</th>
+            <th className="px-3 py-2 font-medium">Threshold</th>
+            <th className="px-3 py-2 font-medium">Coin address</th>
+            <th className="px-3 py-2 font-medium">Enabled</th>
+          </tr>
+        </thead>
+        <tbody>
+          {alerts.map((alert) => (
+            <tr key={alert.id} className="border-t">
+              <td className="px-3 py-2">{alert.condition}</td>
+              <td className="px-3 py-2 font-mono">{alert.threshold}</td>
+              <td className="px-3 py-2 font-mono text-xs break-all">{alert.coin_address}</td>
+              <td className="px-3 py-2">{alert.enabled ? "yes" : "no"}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
   );
 }
 

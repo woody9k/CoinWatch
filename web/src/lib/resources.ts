@@ -193,6 +193,43 @@ export async function createBot(input: BotCreate): Promise<Bot> {
   return parseBot(payload);
 }
 
+export type PriceAlertCondition = "mcap_usd_above" | "mcap_usd_below";
+
+export type PriceAlert = {
+  id: number;
+  chain: string;
+  coin_address: string;
+  condition: string;
+  threshold: string;
+  enabled: boolean;
+  created_by: number;
+};
+
+export type PriceAlertCreate = {
+  chain: string;
+  coin_address: string;
+  condition: PriceAlertCondition;
+  threshold: string;
+};
+
+export async function fetchPriceAlerts(): Promise<PriceAlert[]> {
+  const payload = await apiGet("/api/price-alerts");
+  if (!Array.isArray(payload)) {
+    throw unexpected();
+  }
+  return payload.map(parsePriceAlert);
+}
+
+export async function createPriceAlert(input: PriceAlertCreate): Promise<PriceAlert> {
+  const payload = await apiPost("/api/price-alerts", {
+    chain: input.chain,
+    coin_address: input.coin_address,
+    condition: input.condition,
+    threshold: input.threshold,
+  });
+  return parsePriceAlert(payload);
+}
+
 export async function fetchBots(): Promise<Bot[]> {
   const payload = await apiGet("/api/bots");
   if (!Array.isArray(payload)) {
@@ -316,6 +353,21 @@ function parseStrategy(value: unknown): Strategy {
     id: requireNumber(value, "id"),
     name: requireString(value, "name"),
     yaml_config: requireString(value, "yaml_config"),
+  };
+}
+
+function parsePriceAlert(value: unknown): PriceAlert {
+  if (!isRecord(value)) {
+    throw unexpected();
+  }
+  return {
+    id: requireNumber(value, "id"),
+    chain: requireString(value, "chain"),
+    coin_address: requireString(value, "coin_address"),
+    condition: requireString(value, "condition"),
+    threshold: requireString(value, "threshold"),
+    enabled: requireBoolean(value, "enabled"),
+    created_by: requireNumber(value, "created_by"),
   };
 }
 

@@ -1,21 +1,23 @@
-"""Paper wallet, strategy, and bot control routes.
+"""Paper wallet, strategy, bot, and price-alert control routes.
 
 Each route requires a live session and checks its permission before a query
 or a write. These routes do not step a bot, send alerts, or accept private keys.
 """
 
 import json
+from decimal import Decimal
 
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse, Response
 from sqlalchemy.orm import Session
 
 from coinwatch.api.app import SESSION_COOKIE, error_response, request_id_of, request_session
-from coinwatch.db.models import Bot, Strategy, User, Wallet
+from coinwatch.db.models import Bot, PriceAlert, Strategy, User, Wallet
 from coinwatch.errors import RequestRejected
 from coinwatch.services.controls import (
     UNREADABLE_BODY,
     create_bot,
+    create_price_alert,
     create_strategy,
     create_wallet,
     list_bots,
@@ -134,6 +136,31 @@ async def get_bots(request: Request) -> Response:
     return JSONResponse(content=[_bot_item(row) for row in rows])
 
 
+async def post_price_alert(request: Request) -> Response:
+    """Save one market-cap alert.
+
+    Requires ``alerts.manage`` before the coin lookup. An unknown coin is
+    404 ``not_found``. Any other condition is 422 ``invalid_request``. A
+    non-positive or non-decimal threshold is 422 ``invalid_amount``. The
+    response uses the same public fields as the price-alert list, and
+    ``threshold`` is a decimal string. This route does not call signal-cli.
+    """
+    opened = _session_user(request)
+    if isinstance(opened, JSONResponse):
+        return opened
+    db, user = opened
+    try:
+        alert = create_price_alert(
+            db,
+            user,
+            await _json_body(request),
+            request_id=request_id_of(request),
+        )
+    except RequestRejected as exc:
+        return _price_alert_rejection(exc)
+    return JSONResponse(content=_price_alert_item(alert))
+
+
 async def start_bot(request: Request, bot_id: int) -> Response:
     """Move a paused or stopped bot to running.
 
@@ -209,6 +236,31 @@ def _rejection(exc: RequestRejected) -> JSONResponse:
     return error_response(status, exc.code, str(exc))
 
 
+def _price_alert_rejection(exc: RequestRejected) -> JSONResponse:
+    """Map a price-alert rejection to 404 or 422."""
+    if exc.code == "not_found":
+        return error_response(404, exc.code, str(exc))
+    return error_response(422, exc.code, str(exc))
+
+
+def _price_alert_item(alert: PriceAlert) -> dict[str, object]:
+    """Serialize one price alert. ``threshold`` is a decimal string."""
+    return {
+        "id": alert.id,
+        "chain": alert.chain,
+        "coin_address": alert.coin_address,
+        "condition": alert.condition,
+        "threshold": _decimal(alert.threshold),
+        "enabled": alert.enabled,
+        "created_by": alert.created_by,
+    }
+
+
+def _decimal(value: Decimal) -> str:
+    """Render a decimal as a JSON string without scientific notation."""
+    return format(value, "f")
+
+
 def _wallet_item(wallet: Wallet) -> dict[str, object]:
     """Serialize a wallet without key material."""
     return {
@@ -247,3 +299,4 @@ router.get("/api/bots")(get_bots)
 router.post("/api/bots/{bot_id}/start")(start_bot)
 router.post("/api/bots/{bot_id}/pause")(pause_bot)
 router.post("/api/bots/{bot_id}/stop")(stop_bot)
+router.post("/api/price-alerts")(post_price_alert)

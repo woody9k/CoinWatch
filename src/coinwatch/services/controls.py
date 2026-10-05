@@ -1,16 +1,18 @@
-"""Paper wallet, strategy, and bot controls.
+"""Paper wallet, strategy, bot, and price-alert controls.
 
 The caller owns the transaction. These functions flush the domain row and
 its audit row together, then return. They do not commit. Live bots are
-refused. Private keys are not accepted or stored.
+refused. Private keys are not accepted or stored. Creating a price alert
+does not send one.
 """
 
 from datetime import UTC, datetime
+from decimal import Decimal, InvalidOperation
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from coinwatch.db.models import Bot, Chain, Coin, Strategy, User, Wallet
+from coinwatch.db.models import Bot, Chain, Coin, PriceAlert, Strategy, User, Wallet
 from coinwatch.errors import RequestRejected, StrategyError
 from coinwatch.services.audit import record_audit
 from coinwatch.services.identity import require_permission
@@ -21,6 +23,7 @@ _CHAIN_LEN = 32
 _LABEL_LEN = 128
 _ADDRESS_LEN = 128
 _NAME_LEN = 128
+_PRICE_ALERT_CONDITIONS = frozenset({"mcap_usd_above", "mcap_usd_below"})
 _TRANSITIONS: dict[str, dict[str, str]] = {
     "start": {"paused": "running", "stopped": "running"},
     "pause": {"running": "paused"},
@@ -246,6 +249,68 @@ def create_bot(
     return bot
 
 
+def create_price_alert(
+    session: Session,
+    actor: User,
+    body: object,
+    *,
+    request_id: str,
+) -> PriceAlert:
+    """Insert an enabled market-cap alert and audit ``price_alert.create``.
+
+    Requires ``alerts.manage`` before the coin lookup. ``condition`` must be
+    ``mcap_usd_above`` or ``mcap_usd_below``. ``threshold`` must be a positive
+    decimal string and is stored as ``Decimal``. A missing coin is
+    ``not_found``. A body key whose name includes a secret marker is rejected
+    and nothing is stored. The audit snapshot is ``id``, ``condition``, and
+    ``threshold`` as a decimal string. This function does not send an alert
+    and does not commit.
+    """
+    require_permission(
+        session,
+        actor,
+        "alerts.manage",
+        entity_type="price_alert",
+        entity_id="",
+        request_id=request_id,
+    )
+    payload = _mapping(body)
+    if _has_secret_key(payload):
+        raise RequestRejected("invalid_request", "Invalid request.")
+    chain = _text(payload, "chain", _CHAIN_LEN)
+    coin_address = _text(payload, "coin_address", _ADDRESS_LEN)
+    condition = _price_alert_condition(payload)
+    threshold = _positive_threshold(payload)
+    if session.get(Coin, (chain, coin_address)) is None:
+        raise RequestRejected("not_found", "Not found.")
+    alert = PriceAlert(
+        chain=chain,
+        coin_address=coin_address,
+        condition=condition,
+        threshold=threshold,
+        enabled=True,
+        created_by=actor.id,
+    )
+    session.add(alert)
+    session.flush()
+    record_audit(
+        session,
+        actor_type="user",
+        actor_id=str(actor.id),
+        action="price_alert.create",
+        entity_type="price_alert",
+        entity_id=str(alert.id),
+        result="ok",
+        after={
+            "id": alert.id,
+            "condition": alert.condition,
+            "threshold": format(alert.threshold, "f"),
+        },
+        request_id=request_id,
+    )
+    return alert
+
+
 def list_bots(session: Session, actor: User, *, request_id: str) -> list[Bot]:
     """Return bots in id order.
 
@@ -356,6 +421,28 @@ def _identifier(payload: dict[str, object], key: str) -> int:
     if isinstance(value, bool) or not isinstance(value, int) or value < 1:
         raise RequestRejected("invalid_request", "Invalid request.")
     return value
+
+
+def _price_alert_condition(payload: dict[str, object]) -> str:
+    """Return a market-cap condition, or reject any other value."""
+    value = payload.get("condition")
+    if not isinstance(value, str) or value not in _PRICE_ALERT_CONDITIONS:
+        raise RequestRejected("invalid_request", "Invalid request.")
+    return value
+
+
+def _positive_threshold(payload: dict[str, object]) -> Decimal:
+    """Return a positive finite decimal parsed from a string."""
+    value = payload.get("threshold")
+    if not isinstance(value, str):
+        raise RequestRejected("invalid_amount", "Threshold must be a positive decimal.")
+    try:
+        parsed = Decimal(value.strip())
+    except InvalidOperation:
+        raise RequestRejected("invalid_amount", "Threshold must be a positive decimal.") from None
+    if not parsed.is_finite() or parsed <= 0:
+        raise RequestRejected("invalid_amount", "Threshold must be a positive decimal.")
+    return parsed
 
 
 def _reject_live(payload: dict[str, object]) -> None:
