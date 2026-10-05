@@ -54,6 +54,8 @@ def test_poll_once_upserts_coin_and_appends_ticks(
         volume_15m=Decimal("3.75"),
         holders=None,
         complete=False,
+        virtual_sol_reserves=Decimal(30),
+        virtual_token_reserves=Decimal(1_000_000),
     )
     adapter = _FixedAdapter(state)
     first = datetime(2026, 10, 5, 12, 0, tzinfo=UTC)
@@ -107,6 +109,10 @@ def test_poll_once_upserts_coin_and_appends_ticks(
     assert ticks[1].volume_5m == Decimal("2.50")
     assert ticks[1].volume_15m == Decimal("3.75")
     assert ticks[1].holders is None
+    assert ticks[0].virtual_sol_reserves == Decimal(30)
+    assert ticks[0].virtual_token_reserves == Decimal(1_000_000)
+    assert ticks[1].virtual_sol_reserves == Decimal(30)
+    assert ticks[1].virtual_token_reserves == Decimal(1_000_000)
 
 
 def test_is_stale_at_sixteen_seconds_and_fresh_at_fourteen() -> None:

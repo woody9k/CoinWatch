@@ -26,7 +26,8 @@ def poll_once(
 
     The chain row must already exist. An existing coin keeps ``created_at``
     and receives the supplied ``name`` and ``symbol``. ``now`` is the tick
-    timestamp and must be timezone-aware. The returned tick is pending in
+    timestamp and must be timezone-aware. Virtual SOL and token reserves from
+    the snapshot are copied onto the tick. The returned tick is pending in
     ``session`` until the caller commits.
     """
     coin = session.get(Coin, (chain_id, coin_address))
@@ -58,6 +59,8 @@ def poll_once(
         volume_5m=state.volume_5m,
         volume_15m=state.volume_15m,
         holders=state.holders,
+        virtual_sol_reserves=state.virtual_sol_reserves,
+        virtual_token_reserves=state.virtual_token_reserves,
     )
     session.add(tick)
     session.flush()

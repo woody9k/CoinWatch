@@ -103,6 +103,8 @@ class Tick(Base):
     volume_5m: Mapped[Decimal] = mapped_column(MONEY)
     volume_15m: Mapped[Decimal] = mapped_column(MONEY)
     holders: Mapped[int | None]
+    virtual_sol_reserves: Mapped[Decimal | None] = mapped_column(MONEY)
+    virtual_token_reserves: Mapped[Decimal | None] = mapped_column(MONEY)
 
 
 class Wallet(Base):

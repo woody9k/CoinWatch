@@ -19,15 +19,38 @@ class NotAuthorized(CoinWatchError):
 
 
 class StaleQuote(CoinWatchError):
-    """The last tick is older than the quote freshness window."""
+    """The last tick is missing or older than the quote freshness window."""
+
+    code: str = "stale_quote"
+
+    def __init__(self, message: str = "last tick is missing or older than 15 seconds") -> None:
+        """Record a stable ``code`` of ``stale_quote``."""
+        super().__init__(message)
 
 
 class KillSwitchEngaged(CoinWatchError):
     """New orders are refused because the kill switch is on."""
 
+    code: str = "kill_switch"
+
+    def __init__(self, message: str = "kill switch is engaged") -> None:
+        """Record a stable ``code`` of ``kill_switch``."""
+        super().__init__(message)
+
 
 class QuoteRejected(CoinWatchError):
-    """A pre-trade quote failed a safety check."""
+    """A pre-trade quote failed a safety check.
+
+    ``code`` is a stable snake_case reason such as ``reserves``, ``impact``,
+    or ``fee_reserve``. The message can change.
+    """
+
+    code: str
+
+    def __init__(self, code: str, message: str) -> None:
+        """Record the stable ``code`` and a human-readable ``message``."""
+        self.code = code
+        super().__init__(message)
 
 
 class ChainReadError(CoinWatchError):

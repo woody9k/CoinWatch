@@ -19,6 +19,8 @@ class CoinState:
     the venue has no curve. ``holders`` is ``None`` until a holder scan runs.
     Volume windows are ``Decimal(0)`` when the adapter has no volume source
     yet. ``complete`` is true when the venue reports that the curve has finished.
+    ``virtual_sol_reserves`` and ``virtual_token_reserves`` are the constant-product
+    reserves in human SOL and human tokens.
     """
 
     price_native: Decimal
@@ -31,6 +33,8 @@ class CoinState:
     volume_15m: Decimal
     holders: int | None
     complete: bool
+    virtual_sol_reserves: Decimal
+    virtual_token_reserves: Decimal
 
 
 class ChainAdapter(Protocol):

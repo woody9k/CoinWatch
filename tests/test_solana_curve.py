@@ -66,6 +66,8 @@ def test_decode_price_liquidity_mcap_and_curve(monkeypatch: pytest.MonkeyPatch) 
     assert state.volume_5m == Decimal(0)
     assert state.volume_15m == Decimal(0)
     assert state.holders is None
+    assert state.virtual_sol_reserves == Decimal(30)
+    assert state.virtual_token_reserves == Decimal(1_000_000)
     assert isinstance(state.price_native, Decimal)
     assert not isinstance(state.price_native, float)
 
