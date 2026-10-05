@@ -87,3 +87,17 @@ class ChainReadError(CoinWatchError):
 
 class StrategyError(CoinWatchError):
     """A strategy document is not a single list of allowed comparisons."""
+
+
+class RequestRejected(CoinWatchError):
+    """A control request failed before a domain row was written.
+
+    ``code`` is a stable snake_case reason such as ``invalid_strategy``,
+    ``live_disabled``, ``invalid_status``, or ``invalid_request``.
+    The message does not include a key, seed, or request body.
+    """
+
+    def __init__(self, code: str, message: str) -> None:
+        """Record the stable ``code`` and a human-readable ``message``."""
+        self.code = code
+        super().__init__(message)
