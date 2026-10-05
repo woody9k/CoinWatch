@@ -13,7 +13,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from coinwatch.api.app import SESSION_COOKIE, error_response, request_id_of, request_session
-from coinwatch.db.models import AuditEvent, Coin, Position, PriceAlert, Tick, Trade, User
+from coinwatch.db.models import Alert, AuditEvent, Coin, Position, PriceAlert, Tick, Trade, User
 from coinwatch.services.identity import get_session_user, require_permission
 
 router = APIRouter()
@@ -180,6 +180,33 @@ async def list_price_alerts(request: Request) -> Response:
     return JSONResponse(content=[_price_alert_item(row) for row in rows])
 
 
+async def list_alerts(request: Request, limit: int = _TRADE_LIMIT_DEFAULT) -> Response:
+    """Return recorded alerts, newest id first.
+
+    Requires ``alerts.read`` before the lookup. ``limit`` defaults to 50.
+    A limit outside 1..200 is 422 ``invalid_limit``. ``sent_at`` is ISO-8601
+    or null, including market-cap crossings that have not been sent. This
+    route does not insert or update a row and does not send.
+    """
+    opened = _session_user(request)
+    if isinstance(opened, JSONResponse):
+        return opened
+    db, user = opened
+    require_permission(
+        db,
+        user,
+        "alerts.read",
+        entity_type="alert",
+        entity_id="",
+        request_id=request_id_of(request),
+    )
+    bounded = _trade_limit(limit)
+    if isinstance(bounded, JSONResponse):
+        return bounded
+    rows = db.scalars(select(Alert).order_by(Alert.id.desc()).limit(bounded)).all()
+    return JSONResponse(content=[_alert_item(row) for row in rows])
+
+
 def _session_user(request: Request) -> tuple[Session, User] | JSONResponse:
     """Return the live session user, or 401 when the cookie is missing or dead."""
     db = request_session(request)
@@ -304,6 +331,19 @@ def _price_alert_item(row: PriceAlert) -> dict[str, object]:
     }
 
 
+def _alert_item(row: Alert) -> dict[str, object]:
+    """Serialize one recorded alert. ``coin_address`` and ``sent_at`` may be null."""
+    return {
+        "id": row.id,
+        "chain": row.chain,
+        "coin_address": row.coin_address,
+        "type": row.type,
+        "message": row.message,
+        "sent_at": _timestamp(row.sent_at),
+        "escalated": row.escalated,
+    }
+
+
 def _clamp(value: int, high: int) -> int:
     """Return ``value`` forced into the inclusive range 1..``high``."""
     if value < 1:
@@ -338,3 +378,4 @@ router.get("/api/positions")(list_positions)
 router.get("/api/trades")(list_trades)
 router.get("/api/audit")(list_audit)
 router.get("/api/price-alerts")(list_price_alerts)
+router.get("/api/alerts")(list_alerts)

@@ -212,6 +212,21 @@ export type PriceAlertCreate = {
   threshold: string;
 };
 
+export type RecordedAlert = {
+  id: number;
+  type: string;
+  message: string;
+  sent_at: string | null;
+};
+
+export async function fetchAlerts(): Promise<RecordedAlert[]> {
+  const payload = await apiGet("/api/alerts");
+  if (!Array.isArray(payload)) {
+    throw unexpected();
+  }
+  return payload.map(parseRecordedAlert);
+}
+
 export async function fetchPriceAlerts(): Promise<PriceAlert[]> {
   const payload = await apiGet("/api/price-alerts");
   if (!Array.isArray(payload)) {
@@ -353,6 +368,18 @@ function parseStrategy(value: unknown): Strategy {
     id: requireNumber(value, "id"),
     name: requireString(value, "name"),
     yaml_config: requireString(value, "yaml_config"),
+  };
+}
+
+function parseRecordedAlert(value: unknown): RecordedAlert {
+  if (!isRecord(value)) {
+    throw unexpected();
+  }
+  return {
+    id: requireNumber(value, "id"),
+    type: requireString(value, "type"),
+    message: requireString(value, "message"),
+    sent_at: optionalString(value, "sent_at"),
   };
 }
 

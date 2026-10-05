@@ -5,6 +5,7 @@ import {
   createPriceAlert,
   createStrategy,
   createWallet,
+  fetchAlerts,
   fetchBots,
   fetchCoins,
   fetchPositions,
@@ -22,6 +23,7 @@ import {
   type PriceAlert,
   type PriceAlertCondition,
   type QuotePreview,
+  type RecordedAlert,
   type Strategy,
   type Tick,
   type Trade,
@@ -88,6 +90,11 @@ export function OperatorPage() {
     queryFn: fetchPriceAlerts,
     enabled: canReadAlerts,
   });
+  const recordedAlerts = useQuery({
+    queryKey: ["alerts"],
+    queryFn: fetchAlerts,
+    enabled: canReadAlerts,
+  });
   const signOut = useMutation({
     mutationFn: logout,
     onSettled: async () => {
@@ -145,6 +152,17 @@ export function OperatorPage() {
               alerts={priceAlerts.data}
               error={priceAlerts.error}
               loading={priceAlerts.isLoading}
+            />
+          </section>
+        ) : null}
+
+        {canReadAlerts ? (
+          <section className="space-y-3">
+            <h2 className="text-lg font-medium">Alerts</h2>
+            <AlertTable
+              alerts={recordedAlerts.data}
+              error={recordedAlerts.error}
+              loading={recordedAlerts.isLoading}
             />
           </section>
         ) : null}
@@ -540,6 +558,56 @@ function PriceAlertTable({
               <td className="px-3 py-2 font-mono">{alert.threshold}</td>
               <td className="px-3 py-2 font-mono text-xs break-all">{alert.coin_address}</td>
               <td className="px-3 py-2">{alert.enabled ? "yes" : "no"}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function AlertTable({
+  alerts,
+  error,
+  loading,
+}: {
+  alerts: RecordedAlert[] | undefined;
+  error: unknown;
+  loading: boolean;
+}) {
+  if (loading) {
+    return <p className="text-sm text-muted-foreground">Loading alerts…</p>;
+  }
+  if (error) {
+    return (
+      <p role="alert" className="text-sm text-destructive">
+        {messageOf(error)}
+      </p>
+    );
+  }
+  if (!alerts || alerts.length === 0) {
+    return <p className="text-sm text-muted-foreground">No alerts.</p>;
+  }
+  return (
+    <div className="overflow-x-auto rounded-xl border">
+      <table className="w-full min-w-[40rem] text-left text-sm">
+        <thead className="bg-muted text-muted-foreground">
+          <tr>
+            <th className="px-3 py-2 font-medium">Id</th>
+            <th className="px-3 py-2 font-medium">Type</th>
+            <th className="px-3 py-2 font-medium">Message</th>
+            <th className="px-3 py-2 font-medium">Sent</th>
+          </tr>
+        </thead>
+        <tbody>
+          {alerts.map((alert) => (
+            <tr key={alert.id} className="border-t">
+              <td className="px-3 py-2">{alert.id}</td>
+              <td className="px-3 py-2">{alert.type}</td>
+              <td className="px-3 py-2">{alert.message}</td>
+              <td className="px-3 py-2 whitespace-nowrap">
+                {alert.sent_at === null ? "not sent" : alert.sent_at}
+              </td>
             </tr>
           ))}
         </tbody>
