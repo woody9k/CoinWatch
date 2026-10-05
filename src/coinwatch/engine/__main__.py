@@ -1,8 +1,9 @@
 """Engine process entrypoint.
 
 When ``SOLANA_RPC_URL`` and ``COINWATCH_SOL_USD`` are both set, poll BobCoin
-on the pump.fun bonding curve every 5 seconds, store the tick, and step
-running bots for that coin. Otherwise log ``poller.not_installed`` and wait.
+on the pump.fun bonding curve every 5 seconds, store the tick, record unsent
+market-cap crossings, and step running bots for that coin. Otherwise log
+``poller.not_installed`` and wait.
 The process stops on SIGTERM. Importing this module does not open an RPC
 connection.
 """
@@ -19,10 +20,12 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from coinwatch.chains.base import ChainAdapter
 from coinwatch.chains.solana import SolanaPumpAdapter
+from coinwatch.db.models import Tick
 from coinwatch.db.session import create_engine, session_factory
 from coinwatch.errors import ChainReadError
 from coinwatch.services.bot_run import step_running_bots
 from coinwatch.services.poll import poll_once
+from coinwatch.services.price_cross import record_price_alert_crossings
 from coinwatch.settings import Settings, get_settings
 
 _CHAIN_ID = "solana"
@@ -81,10 +84,11 @@ def main() -> None:
 def _poll_until_stopped(stopped: threading.Event, adapter: ChainAdapter) -> None:
     """Read BobCoin every 5 seconds until ``stopped`` is set.
 
-    Each pass stores a tick and then steps running bots. ``ChainReadError``
-    is logged with the mint and failure label, then the loop continues
-    without stepping bots. A bot step failure does not stop the loop. The
-    RPC URL is not logged.
+    Each pass stores a tick, records market-cap crossings, and then steps
+    running bots. ``ChainReadError`` is logged with the mint and failure
+    label, then the loop continues without recording crossings or stepping
+    bots. A crossing scan failure or a bot step failure does not stop the
+    loop. The RPC URL is not logged.
     """
     factory = session_factory(create_engine())
     while not stopped.is_set():
@@ -114,18 +118,20 @@ def poll_and_step(
     symbol: str,
     now: datetime,
 ) -> None:
-    """Store one tick, then step running bots for that coin.
+    """Store one tick, record crossings, then step running bots for that coin.
 
-    The tick is committed before any bot runs. ``ChainReadError`` is logged
-    as ``poll.failed`` and returns without stepping, because there is no new
-    tick. ``now`` is a timezone-aware timestamp stored on the tick and passed
-    to the bots. A failure while stepping is logged and does not propagate.
-    The RPC URL is not logged.
+    The tick is committed before crossings are scanned and before any bot
+    runs. ``ChainReadError`` is logged as ``poll.failed`` and returns without
+    scanning or stepping, because there is no new tick. ``now`` is a
+    timezone-aware timestamp stored on the tick and passed to the bots. A
+    failure while scanning crossings or while stepping is logged and does not
+    propagate. The RPC URL is not logged.
     """
     log = structlog.get_logger("coinwatch.engine")
+    tick_id: int | None = None
     try:
         with factory() as session:
-            poll_once(
+            tick = poll_once(
                 session,
                 adapter,
                 chain,
@@ -135,11 +141,41 @@ def poll_and_step(
                 now=now,
             )
             session.commit()
+            tick_id = tick.id
     except ChainReadError as exc:
         log.warning("poll.failed", mint=exc.mint, failure=exc.failure)
         return
     log.info("poll.tick", mint=coin_address, chain=chain)
+    if tick_id is not None:
+        _scan_price_alerts(factory, chain=chain, coin_address=coin_address, tick_id=tick_id)
     _step_after_poll(factory, chain=chain, coin_address=coin_address, now=now)
+
+
+def _scan_price_alerts(
+    factory: sessionmaker[Session],
+    *,
+    chain: str,
+    coin_address: str,
+    tick_id: int,
+) -> None:
+    """Open a new session and record unsent crossings for a committed tick.
+
+    Called only after the poll transaction has committed, in the same place
+    running bots are stepped. The scan does not send an alert. An unexpected
+    failure rolls this session back, is logged with the exception type name,
+    and does not propagate, so the bot step still runs. The exception message
+    is not logged.
+    """
+    log = structlog.get_logger("coinwatch.engine")
+    try:
+        with factory() as session:
+            tick = session.get(Tick, tick_id)
+            if tick is None:
+                return
+            record_price_alert_crossings(session, chain, coin_address, tick)
+            session.commit()
+    except Exception as exc:  # noqa: BLE001
+        log.warning("price_alert.cross", exc_type=type(exc).__name__)
 
 
 def _step_after_poll(
