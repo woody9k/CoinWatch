@@ -42,11 +42,14 @@ class User(Base):
 
 
 class UserSession(Base):
-    """Server-side login session."""
+    """Server-side login session.
+
+    ``id`` is an unguessable token stored in the cookie, not a sequential integer.
+    """
 
     __tablename__ = "sessions"
 
-    id: Mapped[int] = mapped_column(primary_key=True)
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id"))
     expires_at: Mapped[datetime] = mapped_column(UtcDateTime)
     created_at: Mapped[datetime] = mapped_column(UtcDateTime)
