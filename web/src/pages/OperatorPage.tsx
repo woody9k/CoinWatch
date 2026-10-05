@@ -1,0 +1,276 @@
+import { cn } from "@/lib/utils.ts";
+import { ApiError } from "@/lib/api.ts";
+import {
+  fetchBots,
+  fetchCoins,
+  logout,
+  transitionBot,
+  type Bot,
+  type BotAction,
+  type Coin,
+  type Tick,
+} from "@/lib/resources.ts";
+import { useSession } from "@/session.ts";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useState } from "react";
+import { Navigate } from "react-router-dom";
+
+const ACTIONS: Record<BotAction, { label: string; statuses: string[] }> = {
+  start: { label: "Start", statuses: ["paused", "stopped"] },
+  pause: { label: "Pause", statuses: ["running"] },
+  stop: { label: "Stop", statuses: ["running", "paused"] },
+};
+
+export function OperatorPage() {
+  const session = useSession();
+  const queryClient = useQueryClient();
+  const me = session.data;
+  const coins = useQuery({
+    queryKey: ["coins"],
+    queryFn: fetchCoins,
+    enabled: me != null,
+  });
+  const bots = useQuery({
+    queryKey: ["bots"],
+    queryFn: fetchBots,
+    enabled: me != null,
+  });
+  const signOut = useMutation({
+    mutationFn: logout,
+    onSettled: async () => {
+      queryClient.setQueryData(["me"], null);
+      await queryClient.invalidateQueries({ queryKey: ["me"] });
+    },
+  });
+
+  if (session.isLoading) {
+    return <Status text="Loading…" />;
+  }
+  if (session.isError) {
+    return <Status text={messageOf(session.error)} />;
+  }
+  if (!me) {
+    return <Navigate to="/login" replace />;
+  }
+
+  const canControl = me.permissions.includes("bots.control");
+
+  return (
+    <main className="min-h-svh bg-background text-foreground">
+      <div className="mx-auto flex max-w-6xl flex-col gap-8 px-4 py-8">
+        <header className="flex flex-wrap items-center justify-between gap-3">
+          <h1 className="text-3xl font-semibold tracking-tight">CoinWatch</h1>
+          <div className="flex items-center gap-3 text-sm">
+            <p>
+              Signed in as <span className="font-medium">{me.username}</span>
+            </p>
+            <button
+              type="button"
+              onClick={() => signOut.mutate()}
+              disabled={signOut.isPending}
+              className="rounded-md border px-3 py-1.5 disabled:opacity-50"
+            >
+              Log out
+            </button>
+          </div>
+        </header>
+
+        <section className="space-y-3">
+          <h2 className="text-lg font-medium">Coins</h2>
+          <CoinTable coins={coins.data} error={coins.error} loading={coins.isLoading} />
+        </section>
+
+        <section className="space-y-3">
+          <h2 className="text-lg font-medium">Bots</h2>
+          <BotTable
+            bots={bots.data}
+            error={bots.error}
+            loading={bots.isLoading}
+            canControl={canControl}
+          />
+        </section>
+      </div>
+    </main>
+  );
+}
+
+function CoinTable({
+  coins,
+  error,
+  loading,
+}: {
+  coins: Coin[] | undefined;
+  error: unknown;
+  loading: boolean;
+}) {
+  if (loading) {
+    return <p className="text-sm text-muted-foreground">Loading coins…</p>;
+  }
+  if (error) {
+    return <p role="alert" className="text-sm text-destructive">{messageOf(error)}</p>;
+  }
+  if (!coins || coins.length === 0) {
+    return <p className="text-sm text-muted-foreground">No coins.</p>;
+  }
+  return (
+    <div className="overflow-x-auto rounded-xl border">
+      <table className="w-full min-w-[64rem] text-left text-sm">
+        <thead className="bg-muted text-muted-foreground">
+          <tr>
+            <th className="px-3 py-2 font-medium">Name</th>
+            <th className="px-3 py-2 font-medium">Symbol</th>
+            <th className="px-3 py-2 font-medium">Address</th>
+            <th className="px-3 py-2 font-medium">Status</th>
+            <th className="px-3 py-2 font-medium">Price (SOL)</th>
+            <th className="px-3 py-2 font-medium">Market cap (USD)</th>
+            <th className="px-3 py-2 font-medium">SOL in curve</th>
+            <th className="px-3 py-2 font-medium">Curve %</th>
+          </tr>
+        </thead>
+        <tbody>
+          {coins.map((coin) => (
+            <tr key={`${coin.chain}:${coin.address}`} className="border-t">
+              <td className="px-3 py-2">{coin.name}</td>
+              <td className="px-3 py-2">{coin.symbol}</td>
+              <td className="px-3 py-2 font-mono text-xs break-all">{coin.address}</td>
+              <td className="px-3 py-2">{coin.status}</td>
+              <td className="px-3 py-2">{tickField(coin.tick, "price_native")}</td>
+              <td className="px-3 py-2">{tickField(coin.tick, "mcap_usd")}</td>
+              <td className="px-3 py-2">{tickField(coin.tick, "liquidity_native")}</td>
+              <td className="px-3 py-2">{curvePercent(coin.tick)}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function BotTable({
+  bots,
+  error,
+  loading,
+  canControl,
+}: {
+  bots: Bot[] | undefined;
+  error: unknown;
+  loading: boolean;
+  canControl: boolean;
+}) {
+  const queryClient = useQueryClient();
+  const [actionError, setActionError] = useState<{ id: number; message: string } | null>(null);
+  const [pendingId, setPendingId] = useState<number | null>(null);
+  const change = useMutation({
+    mutationFn: ({ id, action }: { id: number; action: BotAction }) => transitionBot(id, action),
+    onSettled: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["bots"] });
+    },
+  });
+
+  async function onAction(id: number, action: BotAction) {
+    setActionError(null);
+    setPendingId(id);
+    try {
+      await change.mutateAsync({ id, action });
+    } catch (caught) {
+      setActionError({ id, message: messageOf(caught) });
+    } finally {
+      setPendingId(null);
+    }
+  }
+
+  if (loading) {
+    return <p className="text-sm text-muted-foreground">Loading bots…</p>;
+  }
+  if (error) {
+    return <p role="alert" className="text-sm text-destructive">{messageOf(error)}</p>;
+  }
+  if (!bots || bots.length === 0) {
+    return <p className="text-sm text-muted-foreground">No bots.</p>;
+  }
+
+  return (
+    <div className="overflow-x-auto rounded-xl border">
+      <table className="w-full min-w-[40rem] text-left text-sm">
+        <thead className="bg-muted text-muted-foreground">
+          <tr>
+            <th className="px-3 py-2 font-medium">Id</th>
+            <th className="px-3 py-2 font-medium">Coin address</th>
+            <th className="px-3 py-2 font-medium">Status</th>
+            <th className="px-3 py-2 font-medium">Paper</th>
+            {canControl ? <th className="px-3 py-2 font-medium">Actions</th> : null}
+          </tr>
+        </thead>
+        <tbody>
+          {bots.map((bot) => (
+            <tr key={bot.id} className="border-t align-top">
+              <td className="px-3 py-2">{bot.id}</td>
+              <td className="px-3 py-2 font-mono text-xs break-all">{bot.coin_address}</td>
+              <td className="px-3 py-2">{bot.status}</td>
+              <td className="px-3 py-2">{bot.paper ? "yes" : "no"}</td>
+              {canControl ? (
+                <td className="px-3 py-2">
+                  <div className="flex flex-wrap gap-2">
+                    {(Object.keys(ACTIONS) as BotAction[])
+                      .filter((action) => ACTIONS[action].statuses.includes(bot.status))
+                      .map((action) => (
+                        <button
+                          key={action}
+                          type="button"
+                          disabled={pendingId === bot.id}
+                          onClick={() => void onAction(bot.id, action)}
+                          className={cn(
+                            "rounded-md border px-3 py-1.5",
+                            pendingId === bot.id && "opacity-50",
+                          )}
+                        >
+                          {ACTIONS[action].label}
+                        </button>
+                      ))}
+                  </div>
+                  {actionError?.id === bot.id ? (
+                    <p role="alert" className="mt-2 text-destructive">
+                      {actionError.message}
+                    </p>
+                  ) : null}
+                </td>
+              ) : null}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function tickField(tick: Tick | null, key: keyof Tick): string {
+  if (!tick) {
+    return "—";
+  }
+  return tick[key] ?? "—";
+}
+
+function curvePercent(tick: Tick | null): string {
+  if (!tick || tick.curve_pct === null) {
+    return "—";
+  }
+  return `${tick.curve_pct}%`;
+}
+
+function messageOf(error: unknown): string {
+  if (error instanceof ApiError) {
+    return error.message;
+  }
+  if (error instanceof Error && error.message) {
+    return error.message;
+  }
+  return "Request failed.";
+}
+
+function Status({ text }: { text: string }) {
+  return (
+    <main className="flex min-h-svh items-center justify-center bg-background text-foreground">
+      <p>{text}</p>
+    </main>
+  );
+}
