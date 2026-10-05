@@ -26,9 +26,15 @@ def poll_once(
 
     The chain row must already exist. An existing coin keeps ``created_at``
     and receives the supplied ``name`` and ``symbol``. ``now`` is the tick
-    timestamp and must be timezone-aware. The returned tick is pending in
-    ``session`` until the caller commits.
+    timestamp and must be timezone-aware. Virtual SOL and token reserves from
+    the snapshot are copied onto the tick. When the snapshot is complete, the
+    coin status becomes ``graduated`` and ``graduated_at`` is set to ``now``
+    only if it is still null. A later poll does not clear ``graduated_at`` or
+    move a graduated coin back to ``active``. A new coin whose curve is not
+    complete stays ``active``. The returned tick is pending in ``session``
+    until the caller commits.
     """
+    state = adapter.get_coin_state(coin_address)
     coin = session.get(Coin, (chain_id, coin_address))
     if coin is None:
         coin = Coin(
@@ -37,14 +43,18 @@ def poll_once(
             name=name,
             symbol=symbol,
             created_at=now,
-            status="active",
+            graduated_at=now if state.complete else None,
+            status="graduated" if state.complete else "active",
         )
         session.add(coin)
         session.flush()
     else:
         coin.name = name
         coin.symbol = symbol
-    state = adapter.get_coin_state(coin_address)
+        if state.complete:
+            coin.status = "graduated"
+            if coin.graduated_at is None:
+                coin.graduated_at = now
     tick = Tick(
         chain=chain_id,
         coin_address=coin_address,
@@ -58,6 +68,8 @@ def poll_once(
         volume_5m=state.volume_5m,
         volume_15m=state.volume_15m,
         holders=state.holders,
+        virtual_sol_reserves=state.virtual_sol_reserves,
+        virtual_token_reserves=state.virtual_token_reserves,
     )
     session.add(tick)
     session.flush()

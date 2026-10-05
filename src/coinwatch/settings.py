@@ -16,6 +16,7 @@ class Settings(BaseSettings):
     ``SOLANA_RPC_URL`` and ``COINWATCH_SOL_USD`` enable the BobCoin poller.
     An empty SOL price stays unset so the process does not invent one.
     ``SOLANA_RPC_URL`` may contain an API key: do not log it.
+    ``COINWATCH_KILL_SWITCH`` refuses new quotes when true.
     """
 
     model_config = SettingsConfigDict(
@@ -49,6 +50,10 @@ class Settings(BaseSettings):
             "The poller does not invent a price."
         ),
     )
+    coinwatch_kill_switch: bool = Field(
+        default=False,
+        description="When true, new quotes are refused (COINWATCH_KILL_SWITCH).",
+    )
 
     @field_validator("solana_rpc_url", mode="before")
     @classmethod
@@ -64,6 +69,16 @@ class Settings(BaseSettings):
         """Treat a blank SOL price as unset instead of guessing a rate."""
         if isinstance(value, str) and value.strip() == "":
             return None
+        if isinstance(value, str):
+            return value.strip()
+        return value
+
+    @field_validator("coinwatch_kill_switch", mode="before")
+    @classmethod
+    def _blank_kill_switch_is_off(cls, value: object) -> object:
+        """Treat a blank kill-switch value as off."""
+        if isinstance(value, str) and value.strip() == "":
+            return False
         if isinstance(value, str):
             return value.strip()
         return value

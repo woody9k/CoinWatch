@@ -60,8 +60,10 @@ def decode_bonding_curve(data: bytes, sol_usd: Decimal, *, mint: str) -> CoinSta
     times the total supply times ``sol_usd``. Curve progress is the share of
     the initial real token reserves that have been sold, clamped to 0–100, or
     100 when ``complete`` is true. Volume is not in this account, so the volume
-    windows are ``Decimal(0)`` and ``holders`` is ``None``. Raises
-    ``ChainReadError`` when the body is short or the virtual token reserve is zero.
+    windows are ``Decimal(0)`` and ``holders`` is ``None``. Virtual reserves on
+    the result are human SOL (raw lamports divided by 1e9) and human tokens
+    (raw token units divided by 1e6). Raises ``ChainReadError`` when the body
+    is short or the virtual token reserve is zero.
     """
     if len(data) < _MIN_ACCOUNT_LEN:
         raise ChainReadError("short", mint)
@@ -84,6 +86,8 @@ def decode_bonding_curve(data: bytes, sol_usd: Decimal, *, mint: str) -> CoinSta
         volume_15m=_ZERO,
         holders=None,
         complete=complete,
+        virtual_sol_reserves=Decimal(virtual_sol) / _SOL_SCALE,
+        virtual_token_reserves=Decimal(virtual_token) / _TOKEN_SCALE,
     )
 
 
