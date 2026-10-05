@@ -53,6 +53,23 @@ class QuoteRejected(CoinWatchError):
         super().__init__(message)
 
 
+class AlertSendError(CoinWatchError):
+    """The alert transport failed.
+
+    ``returncode`` is the process status when the sender ran a command.
+    The message is that code, or a fixed failure line when there is no code.
+    It does not include stdout, stderr, or the command line.
+    """
+
+    def __init__(self, returncode: int | None) -> None:
+        """Record ``returncode`` without process output or the command line."""
+        self.returncode = returncode
+        if returncode is None:
+            super().__init__("alert send failed")
+        else:
+            super().__init__(str(returncode))
+
+
 class ChainReadError(CoinWatchError):
     """A chain account could not be read.
 

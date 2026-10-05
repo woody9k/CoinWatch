@@ -17,6 +17,8 @@ class Settings(BaseSettings):
     An empty SOL price stays unset so the process does not invent one.
     ``SOLANA_RPC_URL`` may contain an API key: do not log it.
     ``COINWATCH_KILL_SWITCH`` refuses new quotes when true.
+    ``SIGNAL_CLI_BIN``, ``SIGNAL_ACCOUNT``, and ``SIGNAL_RECIPIENT`` configure
+    the Signal test alert. The message body is not logged at info level.
     """
 
     model_config = SettingsConfigDict(
@@ -53,6 +55,18 @@ class Settings(BaseSettings):
     coinwatch_kill_switch: bool = Field(
         default=False,
         description="When true, new quotes are refused (COINWATCH_KILL_SWITCH).",
+    )
+    signal_cli_bin: str = Field(
+        default="signal-cli",
+        description="signal-cli executable (SIGNAL_CLI_BIN).",
+    )
+    signal_account: str = Field(
+        default="+14075150936",
+        description="signal-cli account to send from (SIGNAL_ACCOUNT).",
+    )
+    signal_recipient: str = Field(
+        default="+14075150936",
+        description="Signal recipient for alerts (SIGNAL_RECIPIENT).",
     )
 
     @field_validator("solana_rpc_url", mode="before")
