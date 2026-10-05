@@ -16,7 +16,19 @@ from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session, sessionmaker
 
 from coinwatch.chains.base import CoinState
-from coinwatch.db.models import Bot, Coin, Decision, Strategy, Tick, Trade, User, Wallet
+from coinwatch.db.models import (
+    Alert,
+    AuditEvent,
+    Bot,
+    Coin,
+    Decision,
+    PriceAlert,
+    Strategy,
+    Tick,
+    Trade,
+    User,
+    Wallet,
+)
 from coinwatch.db.session import create_engine, session_factory
 from coinwatch.engine.__main__ import poll_and_step, poller_configured
 from coinwatch.errors import ChainReadError
@@ -169,6 +181,112 @@ def test_step_failure_leaves_the_tick_and_a_later_poll_can_fill(
         assert trades[0].bot_id == bot_id
         details = check.scalars(select(Decision.detail)).all()
         assert "do-not-persist-this-token" not in details
+
+
+def test_poll_records_an_unsent_crossing_then_steps(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A later poll records one unsent crossing and still steps running bots."""
+    factory, engine, bot_id = _world(tmp_path, monkeypatch)
+    with Session(engine) as session:
+        user_id = session.scalars(select(User.id)).one()
+        session.add(
+            PriceAlert(
+                chain="solana",
+                coin_address=BOBCOIN,
+                condition="mcap_usd_above",
+                threshold=Decimal(10000),
+                enabled=True,
+                created_by=user_id,
+            )
+        )
+        session.commit()
+    poll_and_step(
+        factory,
+        _Mcap(Decimal(9000)),
+        "solana",
+        BOBCOIN,
+        name="BobCoin",
+        symbol="BOB",
+        now=_NOW,
+    )
+    poll_and_step(
+        factory,
+        _Mcap(Decimal(11000)),
+        "solana",
+        BOBCOIN,
+        name="BobCoin",
+        symbol="BOB",
+        now=_LATER,
+    )
+    with Session(engine) as check:
+        alerts = check.scalars(select(Alert)).all()
+        assert len(alerts) == 1
+        assert alerts[0].sent_at is None
+        assert alerts[0].message == "mcap_usd_above 10000 11000"
+        audits = check.scalars(
+            select(AuditEvent).where(AuditEvent.action == "price_alert.cross")
+        ).all()
+        assert len(audits) == 1
+        trades = check.scalars(select(Trade)).all()
+        assert len(trades) == 1
+        assert trades[0].bot_id == bot_id
+
+
+def test_crossing_scan_failure_still_steps_bots(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A scan error leaves the tick, records nothing, and still steps bots."""
+    factory, engine, bot_id = _world(tmp_path, monkeypatch)
+
+    def _boom(*_args: object, **_kwargs: object) -> list[Alert]:
+        raise RuntimeError("do-not-persist-this-token")
+
+    monkeypatch.setattr("coinwatch.engine.__main__.record_price_alert_crossings", _boom)
+    poll_and_step(
+        factory,
+        _Snapshot(),
+        "solana",
+        BOBCOIN,
+        name="BobCoin",
+        symbol="BOB",
+        now=_NOW,
+    )
+    with Session(engine) as check:
+        assert check.scalar(select(func.count()).select_from(Tick)) == 1
+        assert check.scalar(select(func.count()).select_from(Alert)) == 0
+        trades = check.scalars(select(Trade)).all()
+        assert len(trades) == 1
+        assert trades[0].bot_id == bot_id
+        details = check.scalars(select(Decision.detail)).all()
+        assert "do-not-persist-this-token" not in details
+
+
+class _Mcap:
+    """Chain adapter that returns one market cap."""
+
+    id = "solana"
+    native_symbol = "SOL"
+
+    def __init__(self, mcap_usd: Decimal) -> None:
+        self._mcap_usd = mcap_usd
+
+    def get_coin_state(self, coin_address: str) -> CoinState:
+        del coin_address
+        return CoinState(
+            price_native=Decimal("0.00003"),
+            price_usd=Decimal(1),
+            mcap_usd=self._mcap_usd,
+            liquidity_native=Decimal(30),
+            curve_pct=Decimal(40),
+            volume_1m=Decimal(0),
+            volume_5m=Decimal(0),
+            volume_15m=Decimal(0),
+            holders=None,
+            complete=False,
+            virtual_sol_reserves=Decimal(30),
+            virtual_token_reserves=Decimal(1_000_000),
+        )
 
 
 class _Snapshot:
