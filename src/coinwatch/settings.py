@@ -17,6 +17,8 @@ class Settings(BaseSettings):
     An empty SOL price stays unset so the process does not invent one.
     ``SOLANA_RPC_URL`` may contain an API key: do not log it.
     ``COINWATCH_KILL_SWITCH`` refuses new quotes when true.
+    ``COINWATCH_PAPER_BALANCE_SOL`` is the SOL balance a paper quote spends
+    against. It is not a key.
     ``SIGNAL_CLI_BIN``, ``SIGNAL_ACCOUNT``, and ``SIGNAL_RECIPIENT`` configure
     the Signal test alert. The message body is not logged at info level.
     """
@@ -56,6 +58,14 @@ class Settings(BaseSettings):
         default=False,
         description="When true, new quotes are refused (COINWATCH_KILL_SWITCH).",
     )
+    paper_balance_sol: Decimal = Field(
+        default=Decimal(10),
+        validation_alias="COINWATCH_PAPER_BALANCE_SOL",
+        description=(
+            "SOL balance assumed when quoting a paper bot step "
+            "(COINWATCH_PAPER_BALANCE_SOL). This is not a key."
+        ),
+    )
     signal_cli_bin: str = Field(
         default="signal-cli",
         description="signal-cli executable (SIGNAL_CLI_BIN).",
@@ -93,6 +103,16 @@ class Settings(BaseSettings):
         """Treat a blank kill-switch value as off."""
         if isinstance(value, str) and value.strip() == "":
             return False
+        if isinstance(value, str):
+            return value.strip()
+        return value
+
+    @field_validator("paper_balance_sol", mode="before")
+    @classmethod
+    def _blank_paper_balance_is_default(cls, value: object) -> object:
+        """Treat a blank paper balance as the default of 10 SOL."""
+        if isinstance(value, str) and value.strip() == "":
+            return Decimal(10)
         if isinstance(value, str):
             return value.strip()
         return value
