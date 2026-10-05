@@ -78,6 +78,41 @@ export async function fetchCoins(): Promise<Coin[]> {
   return payload.map(parseCoin);
 }
 
+export type Position = {
+  bot_id: number;
+  coin_address: string;
+  size: string;
+  cost_native: string;
+  realized_pnl_native: string;
+};
+
+export type Trade = {
+  id: number;
+  ts: string;
+  side: string;
+  coin_address: string;
+  amount_native: string;
+  fee_native: string;
+  price_impact_pct: string;
+  paper: boolean;
+};
+
+export async function fetchPositions(): Promise<Position[]> {
+  const payload = await apiGet("/api/positions");
+  if (!Array.isArray(payload)) {
+    throw unexpected();
+  }
+  return payload.map(parsePosition);
+}
+
+export async function fetchTrades(): Promise<Trade[]> {
+  const payload = await apiGet("/api/trades");
+  if (!Array.isArray(payload)) {
+    throw unexpected();
+  }
+  return payload.map(parseTrade);
+}
+
 export async function fetchBots(): Promise<Bot[]> {
   const payload = await apiGet("/api/bots");
   if (!Array.isArray(payload)) {
@@ -149,6 +184,35 @@ function parseTick(value: unknown): Tick | null {
     mcap_usd: optionalString(value, "mcap_usd"),
     liquidity_native: optionalString(value, "liquidity_native"),
     curve_pct: optionalString(value, "curve_pct"),
+  };
+}
+
+function parsePosition(value: unknown): Position {
+  if (!isRecord(value)) {
+    throw unexpected();
+  }
+  return {
+    bot_id: requireNumber(value, "bot_id"),
+    coin_address: requireString(value, "coin_address"),
+    size: requireString(value, "size"),
+    cost_native: requireString(value, "cost_native"),
+    realized_pnl_native: requireString(value, "realized_pnl_native"),
+  };
+}
+
+function parseTrade(value: unknown): Trade {
+  if (!isRecord(value)) {
+    throw unexpected();
+  }
+  return {
+    id: requireNumber(value, "id"),
+    ts: requireString(value, "ts"),
+    side: requireString(value, "side"),
+    coin_address: requireString(value, "coin_address"),
+    amount_native: requireString(value, "amount_native"),
+    fee_native: requireString(value, "fee_native"),
+    price_impact_pct: requireString(value, "price_impact_pct"),
+    paper: requireBoolean(value, "paper"),
   };
 }
 
