@@ -32,8 +32,7 @@ def test_paper_buy_then_sell_updates_position_and_audits(
     session.commit()
     position = session.get(Position, bot.id)
     assert position is not None
-    # SQLite stores NUMERIC as float and the column returns 18 decimal places.
-    assert position.size == _saved(buy.expected_out)
+    assert position.size == buy.expected_out
     assert position.cost_native == Decimal(1)
     assert position.realized_pnl_native == Decimal(0)
 
@@ -44,9 +43,9 @@ def test_paper_buy_then_sell_updates_position_and_audits(
     session.commit()
     session.refresh(position)
     cost_removed = cost_before * (_SELL_TOKENS / size_before)
-    assert position.size == _saved(size_before - _SELL_TOKENS)
-    assert position.realized_pnl_native == _saved(sell.sol_credited - cost_removed)
-    assert position.cost_native == _saved(cost_before - cost_removed)
+    assert position.size == size_before - _SELL_TOKENS
+    assert position.realized_pnl_native == sell.sol_credited - cost_removed
+    assert position.cost_native == cost_before - cost_removed
 
     trades = session.scalars(select(Trade).order_by(Trade.id)).all()
     assert len(trades) == 2
@@ -82,12 +81,6 @@ def test_paper_buy_then_sell_updates_position_and_audits(
         == 2
     )
     session.close()
-
-
-def _saved(value: Decimal) -> Decimal:
-    """Return ``value`` as a ``Numeric(38, 18)`` column loads it from SQLite."""
-    quantum = Decimal("0.000000000000000001")
-    return Decimal(float(value)).quantize(quantum)
 
 
 def _session(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Session:

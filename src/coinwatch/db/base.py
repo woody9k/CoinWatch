@@ -1,8 +1,9 @@
 """SQLAlchemy declarative base and shared column types."""
 
 from datetime import UTC, datetime
+from decimal import Decimal
 
-from sqlalchemy import DateTime, MetaData, Numeric
+from sqlalchemy import DateTime, MetaData, String
 from sqlalchemy.engine import Dialect
 from sqlalchemy.orm import DeclarativeBase
 from sqlalchemy.types import TypeDecorator
@@ -15,7 +16,40 @@ NAMING_CONVENTION: dict[str, str] = {
     "pk": "pk_%(table_name)s",
 }
 
-MONEY = Numeric(38, 18)
+
+class Money(TypeDecorator[Decimal]):
+    """Finite ``Decimal`` stored as canonical text.
+
+    SQLite ``NUMERIC`` affinity stores a number as ``REAL`` and coerces a
+    numeric-looking string back into ``REAL``, so ``0.2`` reloads as a binary
+    float. ``TEXT`` keeps the fixed-point form from ``format(value, "f")``.
+    ``String(80)`` holds a 38-digit value plus a sign and a decimal point.
+    """
+
+    impl = String(80)
+    cache_ok = True
+
+    def process_bind_param(self, value: Decimal | None, dialect: Dialect) -> str | None:
+        """Store a finite decimal as a fixed-point string."""
+        if value is None:
+            return None
+        if not isinstance(value, Decimal):
+            raise TypeError("money value must be Decimal")
+        if not value.is_finite():
+            raise ValueError("money value must be finite")
+        return format(value, "f")
+
+    def process_result_value(self, value: object | None, dialect: Dialect) -> Decimal | None:
+        """Load the stored value with ``Decimal(str(value))``."""
+        if value is None:
+            return None
+        parsed = Decimal(str(value))
+        if not parsed.is_finite():
+            raise ValueError("money value must be finite")
+        return parsed
+
+
+MONEY = Money
 
 
 class UtcDateTime(TypeDecorator[datetime]):
