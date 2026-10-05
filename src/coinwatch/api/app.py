@@ -293,6 +293,10 @@ def create_app() -> FastAPI:
         )
         return JSONResponse(content=payload.model_dump())
 
+    # Import after this module defines the helpers the router calls.
+    from coinwatch.api.reads import router as reads_router
+
+    app.include_router(reads_router)
     return app
 
 
