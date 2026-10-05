@@ -115,6 +115,66 @@ def test_poll_once_upserts_coin_and_appends_ticks(
     assert ticks[1].virtual_token_reserves == Decimal(1_000_000)
 
 
+def test_poll_once_keeps_graduation_after_later_polls(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A completed curve graduates the coin once and later polls leave that stamp."""
+    database_path = tmp_path / "coinwatch.db"
+    url = f"sqlite:///{database_path}"
+    monkeypatch.setenv("DATABASE_URL", url)
+    root = Path(__file__).resolve().parents[1]
+    command.upgrade(Config(str(root / "alembic.ini")), "head")
+    adapter = _FixedAdapter(_state(complete=True))
+    first = datetime(2026, 10, 5, 12, 0, tzinfo=UTC)
+    second = datetime(2026, 10, 5, 12, 0, 5, tzinfo=UTC)
+    third = datetime(2026, 10, 5, 12, 0, 10, tzinfo=UTC)
+    engine = create_engine(url)
+    with Session(engine) as session:
+        poll_once(session, adapter, "solana", BOBCOIN, name="BobCoin", symbol="BOB", now=first)
+        session.commit()
+    with Session(engine) as session:
+        coin = session.get(Coin, ("solana", BOBCOIN))
+        assert coin is not None
+        assert coin.status == "graduated"
+        assert coin.graduated_at == first
+
+        adapter._state = _state(complete=True)
+        poll_once(session, adapter, "solana", BOBCOIN, name="BobCoin", symbol="BOB", now=second)
+        session.commit()
+    with Session(engine) as session:
+        coin = session.get(Coin, ("solana", BOBCOIN))
+        assert coin is not None
+        assert coin.status == "graduated"
+        assert coin.graduated_at == first
+
+        adapter._state = _state(complete=False)
+        poll_once(session, adapter, "solana", BOBCOIN, name="BobCoin", symbol="BOB", now=third)
+        session.commit()
+    with Session(engine) as session:
+        coin = session.get(Coin, ("solana", BOBCOIN))
+        assert coin is not None
+        assert coin.status == "graduated"
+        assert coin.graduated_at == first
+
+
+def _state(*, complete: bool) -> CoinState:
+    """Return one BobCoin snapshot with the given curve-complete flag."""
+    return CoinState(
+        price_native=Decimal("0.00003"),
+        price_usd=Decimal("0.0045"),
+        mcap_usd=Decimal(4500000),
+        liquidity_native=Decimal("5.5"),
+        curve_pct=Decimal(100) if complete else Decimal(25),
+        volume_1m=Decimal(0),
+        volume_5m=Decimal(0),
+        volume_15m=Decimal(0),
+        holders=None,
+        complete=complete,
+        virtual_sol_reserves=Decimal(30),
+        virtual_token_reserves=Decimal(1_000_000),
+    )
+
+
 def test_is_stale_at_sixteen_seconds_and_fresh_at_fourteen() -> None:
     """A tick older than 15 seconds is stale. Fourteen seconds is still fresh."""
     now = datetime(2026, 10, 5, 12, 0, tzinfo=UTC)

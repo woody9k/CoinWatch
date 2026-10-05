@@ -3,6 +3,8 @@
 ``quote-buy`` spends SOL. ``quote-sell`` spends tokens. Both print the quote
 as JSON. A refusal prints ``{"error": {"code": "...", "message": "..."}}``
 and exits 2. The kill switch is ``COINWATCH_KILL_SWITCH`` (default false).
+The coin is complete when its status is ``graduated`` or ``graduated_at`` is
+set, and that quote is refused with ``venue_migrated``.
 """
 
 import argparse
@@ -14,7 +16,7 @@ from typing import cast
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from coinwatch.db.models import Tick
+from coinwatch.db.models import Coin, Tick
 from coinwatch.db.session import create_engine
 from coinwatch.errors import KillSwitchEngaged, QuoteRejected, StaleQuote
 from coinwatch.quoting import Quote, quote_buy, quote_sell
@@ -55,7 +57,11 @@ def _add_common(parser: argparse.ArgumentParser) -> None:
 
 
 def _quote(args: argparse.Namespace) -> Quote:
-    """Load the latest BobCoin tick and quote it. Does not open an RPC client."""
+    """Load the latest BobCoin tick and coin, then quote them.
+
+    Does not open an RPC client. ``complete`` is true when the coin status is
+    ``graduated`` or ``graduated_at`` is set. A missing coin is not complete.
+    """
     settings = get_settings()
     engine = create_engine()
     with Session(engine) as session:
@@ -65,11 +71,13 @@ def _quote(args: argparse.Namespace) -> Quote:
             .order_by(Tick.ts.desc())
             .limit(1)
         )
+        coin = session.get(Coin, (CHAIN, BOBCOIN))
         observed_at = None if tick is None else tick.ts
         virtual_sol = None if tick is None else tick.virtual_sol_reserves
         virtual_token = None if tick is None else tick.virtual_token_reserves
-        # Ticks do not store the curve complete flag. Callers with a CoinState
-        # pass that flag into quote_buy or quote_sell themselves.
+        complete = coin is not None and (
+            coin.status == "graduated" or coin.graduated_at is not None
+        )
         now = datetime.now(UTC)
         balance = cast(Decimal, args.balance)
         slippage_pct = cast(Decimal, args.slippage_pct)
@@ -82,7 +90,7 @@ def _quote(args: argparse.Namespace) -> Quote:
                 virtual_token=virtual_token,
                 observed_at=observed_at,
                 now=now,
-                complete=False,
+                complete=complete,
                 wallet_balance_sol=balance,
                 kill_switch=settings.coinwatch_kill_switch,
                 slippage_pct=slippage_pct,
@@ -94,7 +102,7 @@ def _quote(args: argparse.Namespace) -> Quote:
             virtual_token=virtual_token,
             observed_at=observed_at,
             now=now,
-            complete=False,
+            complete=complete,
             wallet_balance_sol=balance,
             position_size=cast(Decimal, args.position_size),
             kill_switch=settings.coinwatch_kill_switch,
