@@ -1,6 +1,6 @@
 """ORM models for the CoinWatch SQLite schema.
 
-Column sets follow spec section 10. Money and prices use ``Numeric``.
+Column sets follow spec section 10. Money and prices use ``MONEY`` text.
 Timestamps are timezone-aware UTC. ``audit_events`` is append-only in
 application code: insert the row with the change, and do not update or
 delete it.
