@@ -91,6 +91,37 @@ export async function transitionBot(id: number, action: BotAction): Promise<Bot>
   return parseBot(payload);
 }
 
+export type QuotePreview = {
+  side: string;
+  amount_in: string;
+  expected_out: string;
+  minimum_out: string;
+  fee_native: string;
+  price_impact_pct: string;
+  sol_debited: string;
+  sol_credited: string;
+};
+
+export type QuoteRequest = {
+  side: "buy" | "sell";
+  coin_address: string;
+  amount: string;
+  position_size?: string;
+};
+
+export async function previewQuote(input: QuoteRequest): Promise<QuotePreview> {
+  const body: Record<string, string> = {
+    side: input.side,
+    coin_address: input.coin_address,
+    amount: input.amount,
+  };
+  if (input.side === "sell" && input.position_size) {
+    body.position_size = input.position_size;
+  }
+  const payload = await apiPost("/api/quotes", body);
+  return parseQuote(payload);
+}
+
 function parseCoin(value: unknown): Coin {
   if (!isRecord(value)) {
     throw unexpected();
@@ -134,6 +165,22 @@ function parseBot(value: unknown): Bot {
     status: requireString(value, "status"),
     paper: requireBoolean(value, "paper"),
     act_on_inference: requireBoolean(value, "act_on_inference"),
+  };
+}
+
+function parseQuote(value: unknown): QuotePreview {
+  if (!isRecord(value)) {
+    throw unexpected();
+  }
+  return {
+    side: requireString(value, "side"),
+    amount_in: requireString(value, "amount_in"),
+    expected_out: requireString(value, "expected_out"),
+    minimum_out: requireString(value, "minimum_out"),
+    fee_native: requireString(value, "fee_native"),
+    price_impact_pct: requireString(value, "price_impact_pct"),
+    sol_debited: requireString(value, "sol_debited"),
+    sol_credited: requireString(value, "sol_credited"),
   };
 }
 
