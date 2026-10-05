@@ -21,6 +21,8 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 from starlette.exceptions import HTTPException
 
+from coinwatch.alerts.base import AlertSender
+from coinwatch.alerts.signal_cli import SignalCliSender
 from coinwatch.authz import permissions_for
 from coinwatch.db.models import User, UserSession
 from coinwatch.db.session import create_engine, session_factory
@@ -32,6 +34,7 @@ from coinwatch.services.identity import (
     ensure_admin,
     get_session_user,
 )
+from coinwatch.settings import get_settings
 
 SESSION_COOKIE = "coinwatch_session"
 _MUTATING_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
@@ -42,9 +45,10 @@ _RequestHandler = Callable[[Request], Awaitable[Response]]
 class ApiState:
     """Process state shared by requests after startup."""
 
-    def __init__(self, sessions: sessionmaker[Session]) -> None:
-        """Keep the session factory created during application startup."""
+    def __init__(self, sessions: sessionmaker[Session], alert_sender: AlertSender) -> None:
+        """Keep the session factory and the alert sender for this process."""
         self.sessions = sessions
+        self.alert_sender = alert_sender
 
 
 class LoginRequest(BaseModel):
@@ -118,11 +122,13 @@ def request_id_of(request: Request) -> str:
     return ""
 
 
-def create_app() -> FastAPI:
+def create_app(alert_sender: AlertSender | None = None) -> FastAPI:
     """Build the CoinWatch HTTP application.
 
     Startup seeds the bootstrap admin and commits that insert. The process
     listens only when ``main`` runs it; this function does not bind a port.
+    When ``alert_sender`` is omitted, the app uses ``SignalCliSender`` built
+    from settings. Tests pass a fake sender.
     """
     configure_logging()
     log = structlog.get_logger("coinwatch.api")
@@ -132,7 +138,7 @@ def create_app() -> FastAPI:
         """Open the database, seed the admin, and close the engine on shutdown."""
         engine = create_engine()
         factory = session_factory(engine)
-        app.state.api = ApiState(factory)
+        app.state.api = ApiState(factory, _alert_sender(alert_sender))
         with factory() as session:
             ensure_admin(session)
             session.commit()
@@ -294,10 +300,20 @@ def create_app() -> FastAPI:
         return JSONResponse(content=payload.model_dump())
 
     # Import after this module defines the helpers the router calls.
+    from coinwatch.api.alerts import router as alerts_router
     from coinwatch.api.reads import router as reads_router
 
     app.include_router(reads_router)
+    app.include_router(alerts_router)
     return app
+
+
+def _alert_sender(alert_sender: AlertSender | None) -> AlertSender:
+    """Return the injected sender, or a ``SignalCliSender`` from settings."""
+    if alert_sender is not None:
+        return alert_sender
+    settings = get_settings()
+    return SignalCliSender(settings.signal_cli_bin, settings.signal_account)
 
 
 def _require_session(request: Request) -> Session:
