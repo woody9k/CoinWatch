@@ -4,6 +4,9 @@ Each route requires a live session and checks its permission before a query
 result is returned. These routes do not create, update, or delete rows.
 """
 
+import csv
+import io
+from collections.abc import Sequence
 from datetime import datetime
 from decimal import Decimal
 
@@ -25,6 +28,17 @@ _AUDIT_LIMIT_MAX = 200
 _TRADE_LIMIT_DEFAULT = 50
 _TRADE_LIMIT_MIN = 1
 _TRADE_LIMIT_MAX = 200
+_TRADE_CSV_HEADER = (
+    "id",
+    "ts",
+    "side",
+    "chain",
+    "coin_address",
+    "amount_native",
+    "fee_native",
+    "price_impact_pct",
+    "paper",
+)
 
 
 async def list_coins(request: Request) -> Response:
@@ -157,6 +171,39 @@ async def list_trades(request: Request, limit: int = _TRADE_LIMIT_DEFAULT) -> Re
         return bounded
     rows = db.scalars(select(Trade).order_by(Trade.ts.desc(), Trade.id.desc()).limit(bounded)).all()
     return JSONResponse(content=[_trade_item(row) for row in rows])
+
+
+async def list_trades_csv(request: Request, limit: int = _TRADE_LIMIT_DEFAULT) -> Response:
+    """Return the newest trades as a CSV download.
+
+    Requires ``trades.read`` before the lookup. ``limit`` defaults to 50.
+    A limit outside 1..200 is 422 ``invalid_limit``. The header is
+    ``id,ts,side,chain,coin_address,amount_native,fee_native,price_impact_pct,paper``.
+    Money fields are decimal strings from ``format(value, "f")``. ``paper``
+    is ``true`` or ``false``. Rows match ``GET /api/trades``, newest first.
+    This route does not insert or update a row.
+    """
+    opened = _session_user(request)
+    if isinstance(opened, JSONResponse):
+        return opened
+    db, user = opened
+    require_permission(
+        db,
+        user,
+        "trades.read",
+        entity_type="trade",
+        entity_id="",
+        request_id=request_id_of(request),
+    )
+    bounded = _trade_limit(limit)
+    if isinstance(bounded, JSONResponse):
+        return bounded
+    rows = db.scalars(select(Trade).order_by(Trade.ts.desc(), Trade.id.desc()).limit(bounded)).all()
+    return Response(
+        content=_trades_csv(rows),
+        media_type="text/csv",
+        headers={"Content-Disposition": 'attachment; filename="trades.csv"'},
+    )
 
 
 async def list_price_alerts(request: Request) -> Response:
@@ -311,6 +358,31 @@ def _trade_item(row: Trade) -> dict[str, object]:
     }
 
 
+def _trades_csv(rows: Sequence[Trade]) -> str:
+    """Render fills with ``csv.writer`` so a comma inside a field is quoted."""
+    buffer = io.StringIO()
+    writer = csv.writer(buffer)
+    writer.writerow(_TRADE_CSV_HEADER)
+    for row in rows:
+        writer.writerow(_trade_csv_fields(row))
+    return buffer.getvalue()
+
+
+def _trade_csv_fields(row: Trade) -> list[str]:
+    """Return one CSV row. Money fields stay decimal strings."""
+    return [
+        str(row.id),
+        _timestamp(row.ts) or "",
+        row.side,
+        row.chain,
+        row.coin_address,
+        _decimal(row.amount_native) or "",
+        _decimal(row.fee_native) or "",
+        _decimal(row.price_impact_pct) or "",
+        "true" if row.paper else "false",
+    ]
+
+
 def _trade_limit(limit: int) -> int | JSONResponse:
     """Accept a limit in 1..200, or return 422 ``invalid_limit``."""
     if limit < _TRADE_LIMIT_MIN or limit > _TRADE_LIMIT_MAX:
@@ -376,6 +448,7 @@ router.get("/api/coins")(list_coins)
 router.get("/api/ticks")(list_ticks)
 router.get("/api/positions")(list_positions)
 router.get("/api/trades")(list_trades)
+router.get("/api/trades.csv")(list_trades_csv)
 router.get("/api/audit")(list_audit)
 router.get("/api/price-alerts")(list_price_alerts)
 router.get("/api/alerts")(list_alerts)

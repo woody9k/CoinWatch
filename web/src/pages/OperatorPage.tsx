@@ -182,7 +182,12 @@ export function OperatorPage() {
               />
             </section>
             <section className="space-y-3">
-              <h2 className="text-lg font-medium">Trades</h2>
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <h2 className="text-lg font-medium">Trades</h2>
+                <a href="/api/trades.csv" className="text-sm underline">
+                  Download CSV
+                </a>
+              </div>
               <TradeTable trades={trades.data} error={trades.error} loading={trades.isLoading} />
             </section>
           </>
